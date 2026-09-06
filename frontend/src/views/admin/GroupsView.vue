@@ -100,6 +100,7 @@
               <Icon name="arrowsUpDown" size="md" class="mr-2" />
               {{ t("admin.groups.sortOrder") }}
             </button>
+			<button type="button" class="btn btn-secondary" @click="showAutoRoutingPolicy = true"><Icon name="arrowsUpDown" size="md" class="mr-2" />{{ t('admin.smartRoutingPolicy.title') }}</button>
             <button
               @click="openCreateModal"
               class="btn btn-primary"
@@ -4589,6 +4590,7 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+    <AutoRoutingPolicyModal :show="showAutoRoutingPolicy" @close="showAutoRoutingPolicy = false" />
   </AppLayout>
 </template>
 
@@ -4625,6 +4627,8 @@ import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
+import AutoRoutingPolicyModal from "@/components/admin/group/AutoRoutingPolicyModal.vue";
+const showAutoRoutingPolicy = ref(false);
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";

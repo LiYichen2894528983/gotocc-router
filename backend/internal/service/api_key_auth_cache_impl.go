@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 23 // v23: v22 billing/team fields plus group free_openai_fast
+const apiKeyAuthSnapshotVersion = 24 // v24 adds the explicit API key routing mode.
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -390,6 +390,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		TeamOwnerDisabled: apiKey.TeamOwnerDisabled,
 		CreatedAt:         apiKey.CreatedAt,
 		GroupID:           apiKey.GroupID,
+		RoutingMode:       apiKey.EffectiveRoutingMode(),
 		Name:              apiKey.Name,
 		Status:            apiKey.Status,
 		IPWhitelist:       apiKey.IPWhitelist,
@@ -508,6 +509,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		TeamOwnerDisabled: snapshot.TeamOwnerDisabled,
 		CreatedAt:         snapshot.CreatedAt,
 		GroupID:           snapshot.GroupID,
+		RoutingMode:       snapshot.RoutingMode,
 		Key:               key,
 		Name:              snapshot.Name,
 		Status:            snapshot.Status,
