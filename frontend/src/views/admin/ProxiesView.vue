@@ -24,7 +24,7 @@
               v-model="filters.protocol"
               :options="protocolOptions"
               :placeholder="t('admin.proxies.allProtocols')"
-              @change="loadProxies"
+              @change="handleFilterChange"
             />
           </div>
           <div class="w-full sm:w-36">
@@ -32,7 +32,7 @@
               v-model="filters.status"
               :options="statusOptions"
               :placeholder="t('admin.proxies.allStatus')"
-              @change="loadProxies"
+              @change="handleFilterChange"
             />
           </div>
 
@@ -512,7 +512,7 @@
             class="input mb-2"
             :placeholder="t('admin.proxies.expiryDaysPlaceholder')"
           />
-          <input v-model="createForm.expires_at" type="date" class="input" />
+          <input v-model="createForm.expires_at" type="date" max="9999-12-31" class="input" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.fallbackMode') }}</label>
@@ -525,6 +525,26 @@
         <div v-if="createForm.fallback_mode === 'proxy'">
           <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
           <Select v-model="createForm.backup_proxy_id" :options="backupProxyOptions()" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="input-label">{{ t('admin.proxies.egressTimezone') }}</label>
+            <Select
+              v-model="createForm.egress_timezone"
+              :options="egressTimezoneOptions"
+              searchable
+            />
+            <p class="input-hint mt-1">{{ t('admin.proxies.egressTimezoneHint') }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.proxies.egressCountry') }}</label>
+            <Select
+              v-model="createForm.egress_country"
+              :options="egressCountryOptions"
+              searchable
+            />
+            <p class="input-hint mt-1">{{ t('admin.proxies.egressCountryHint') }}</p>
+          </div>
         </div>
 
       </form>
@@ -745,7 +765,7 @@
             class="input mb-2"
             :placeholder="t('admin.proxies.expiryDaysPlaceholder')"
           />
-          <input v-model="editForm.expires_at" type="date" class="input" />
+          <input v-model="editForm.expires_at" type="date" max="9999-12-31" class="input" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.fallbackMode') }}</label>
@@ -758,6 +778,26 @@
         <div v-if="editForm.fallback_mode === 'proxy'">
           <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
           <Select v-model="editForm.backup_proxy_id" :options="backupProxyOptions(editingProxy?.id)" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="input-label">{{ t('admin.proxies.egressTimezone') }}</label>
+            <Select
+              v-model="editForm.egress_timezone"
+              :options="egressTimezoneOptions"
+              searchable
+            />
+            <p class="input-hint mt-1">{{ t('admin.proxies.egressTimezoneHint') }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.proxies.egressCountry') }}</label>
+            <Select
+              v-model="editForm.egress_country"
+              :options="egressCountryOptions"
+              searchable
+            />
+            <p class="input-hint mt-1">{{ t('admin.proxies.egressCountryHint') }}</p>
+          </div>
         </div>
 
       </form>
@@ -929,7 +969,7 @@
       <div v-else-if="proxyAccounts.length === 0" class="py-6 text-center text-sm text-gray-500">
         {{ t('admin.proxies.accountsEmpty') }}
       </div>
-      <div v-else class="max-h-80 overflow-auto">
+      <div v-else class="table-container max-h-80 overflow-auto">
         <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
           <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
             <tr>
@@ -978,6 +1018,8 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
 import Select from '@/components/common/Select.vue'
+import { getTimezoneOptions } from '@/utils/timezones'
+import { getCountryOptions } from '@/utils/countries'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import { useClipboard } from '@/composables/useClipboard'
@@ -987,7 +1029,17 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatDateTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+
+// 出口时区/国家下拉选项：首项为空值（跟随上级），其余来自 IANA/ISO 全量数据。
+const egressTimezoneOptions = computed(() => [
+  { label: t('admin.proxies.egressTimezoneNone'), value: '' },
+  ...getTimezoneOptions(),
+])
+const egressCountryOptions = computed(() => [
+  { label: t('admin.proxies.egressCountryNone'), value: '' },
+  ...getCountryOptions(locale?.value || 'en'),
+])
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
 
@@ -1130,6 +1182,8 @@ const createForm = reactive({
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
+  egress_timezone: '',
+  egress_country: '',
 })
 
 const editForm = reactive({
@@ -1144,6 +1198,8 @@ const editForm = reactive({
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
+  egress_timezone: '',
+  egress_country: '',
 })
 
 const allProxiesForBackup = ref<Proxy[]>([])
@@ -1219,6 +1275,11 @@ const loadProxies = async () => {
   }
 }
 
+const handleFilterChange = () => {
+  pagination.page = 1
+  loadProxies()
+}
+
 let searchTimeout: ReturnType<typeof setTimeout>
 const handleSearch = () => {
   clearTimeout(searchTimeout)
@@ -1257,6 +1318,8 @@ const closeCreateModal = () => {
   createForm.password = ''
   createForm.expires_at = ''
   createForm.fallback_mode = 'none'
+  createForm.egress_timezone = ''
+  createForm.egress_country = ''
   createForm.backup_proxy_id = null
   createForm.expiry_warn_days = 7
   createPasswordVisible.value = false
@@ -1395,6 +1458,8 @@ const handleCreateProxy = async () => {
       fallback_mode: createForm.fallback_mode,
       backup_proxy_id: createForm.fallback_mode === 'proxy' ? createForm.backup_proxy_id : null,
       expiry_warn_days: createForm.expiry_warn_days,
+      egress_timezone: createForm.egress_timezone.trim(),
+      egress_country: createForm.egress_country.trim().toUpperCase(),
     })
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
     closeCreateModal()
@@ -1420,6 +1485,8 @@ const handleEdit = (proxy: Proxy) => {
   editForm.fallback_mode = proxy.fallback_mode || 'none'
   editForm.backup_proxy_id = proxy.backup_proxy_id ?? null
   editForm.expiry_warn_days = proxy.expiry_warn_days ?? 7
+  editForm.egress_timezone = proxy.egress_timezone || ''
+  editForm.egress_country = proxy.egress_country || ''
   editPasswordVisible.value = false
   editPasswordDirty.value = false
   showEditModal.value = true
@@ -1454,17 +1521,19 @@ const handleUpdateProxy = async () => {
       protocol: editForm.protocol,
       host: editForm.host.trim(),
       port: editForm.port,
-      username: editForm.username.trim() || null,
+      username: editForm.username.trim(),
       status: editForm.status,
       expires_at: editForm.expires_at ? Math.floor(new Date(editForm.expires_at).getTime() / 1000) : null,
       fallback_mode: editForm.fallback_mode,
       backup_proxy_id: editForm.fallback_mode === 'proxy' ? editForm.backup_proxy_id : null,
       expiry_warn_days: editForm.expiry_warn_days,
+      egress_timezone: editForm.egress_timezone.trim(),
+      egress_country: editForm.egress_country.trim().toUpperCase(),
     }
 
     // Only include password if user actually modified the field
     if (editPasswordDirty.value) {
-      updateData.password = editForm.password.trim() || null
+      updateData.password = editForm.password.trim()
     }
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)
@@ -1784,6 +1853,14 @@ const qualityTargetLabel = (target: string) => {
       return 'Gemini'
     case 'grok':
       return 'Grok'
+    case 'kimi':
+      return 'Kimi'
+    case 'zhipu':
+      return 'Zhipu GLM'
+    case 'deepseek':
+      return 'DeepSeek'
+    case 'minimax':
+      return 'MiniMax'
     default:
       return target
   }

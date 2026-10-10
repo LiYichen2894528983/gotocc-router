@@ -16,6 +16,7 @@ import (
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/logger"
 	"github.com/LuckyKuang/sub2api-plus/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -89,7 +90,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	upstreamMsg string,
 	upstreamModel string,
 ) *UpstreamFailoverError {
-	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody)
 	tempUnscheduled := false
 	if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover && !IsResponseCommitted(c) && s.rateLimitService != nil {
 		tempUnscheduled = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, upstreamModel) == ErrorPolicyTempUnscheduled
@@ -129,6 +130,8 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		return newOpenAIUpstreamFailoverError(resp.StatusCode, resp.Header, respBody, upstreamMsg, false)
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -197,6 +200,11 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	userAgent string,
 	grokCacheIdentity string,
 ) (*http.Response, error) {
+	// DeepSeek thinking mode 要求历史 assistant 回传 reasoning_content。
+	// Responses→CC 回退在加密-only / 缺 reasoning item 且缓存未命中时会漏掉该
+	// 字段，上游 400 "The `reasoning_content` in the thinking mode must be
+	// passed back to the API"。在共用出站点补空格占位，真实明文不覆盖。
+	body = ensureDeepSeekChatReasoningPlaceholders(account, body)
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
@@ -207,19 +215,19 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// OpenAIForwardResult（例如 503/传输失败）时使用。每次发送都覆盖，
 	// 避免 Gin context 在账号 failover 尝试之间残留旧端点。
 	SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
-	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
+	profile := HTTPUpstreamProfileOpenAI
+	if account != nil && account.Platform == PlatformGrok {
+		profile = HTTPUpstreamProfileGrok
+	}
+	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), profile))
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Authorization", "Bearer "+bearerToken)
-	if stream {
-		upstreamReq.Header.Set("Accept", "text/event-stream")
-	} else {
-		upstreamReq.Header.Set("Accept", "application/json")
-	}
+	upstreamReq.Header.Set("Accept", grokSamplerAcceptHeader(stream))
 
 	// 透传白名单中的客户端 header。详见 openaiCCRawAllowedHeaders 的设计说明。
 	for key, values := range c.Request.Header {
 		lowerKey := strings.ToLower(key)
-		if openaiCCRawAllowedHeaders[lowerKey] {
+		if account.Platform != PlatformGrok && openaiCCRawAllowedHeaders[lowerKey] {
 			for _, v := range values {
 				upstreamReq.Header.Add(key, v)
 			}
@@ -233,7 +241,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 		if account.IsGrokOAuth() {
 			applyGrokCLIHeaders(upstreamReq.Header)
 		}
-		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
+		applyGrokRequestMetadata(upstreamReq.Header, body, resolveGrokRequestConversation(c, body, grokCacheIdentity), account.GetCredential("sub"))
 	}
 	// OpenAI identity is always the final stage. Other providers retain their
 	// existing generic override behavior.
@@ -244,9 +252,19 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	} else {
 		account.ApplyHeaderOverrides(upstreamReq.Header)
 	}
+	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
+	if account.Platform == PlatformGrok {
+		// Accept is a Grok request-owned operation declaration: it follows the
+		// streaming state of the final body and survives account header
+		// overrides.
+		upstreamReq.Header.Set("Accept", grokSamplerAcceptHeader(stream))
+		// Chat Completions sampler requests negotiate the same final-JSON
+		// compression as the Responses and Messages adapters.
+		s.applyGrokRequestCompression(upstreamReq, account, body, s.settingService)
+	}
 
 	proxyURL := ""
-	if account.Proxy != nil {
+	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
@@ -262,12 +280,17 @@ type ccStreamScanState struct {
 	// 总是保留最新值）；终态事件中的用量由调用方在 finalize 阶段自行覆盖。
 	Usage OpenAIUsage
 	// SawDone 表示上游发出了 [DONE] 哨兵。
-	SawDone bool
+	SawDone  bool
+	SawError bool
 	// Err 为 scanner 读错误（客户端 context 取消不属于此类，会原样带出）。
 	// 非 nil 时调用方必须跳过 finalize 并返回 usage-incomplete 错误，避免
 	// 把上游截断伪装成正常收尾。
 	Err          error
 	FirstTokenMs *int
+}
+
+func (s ccStreamScanState) usageIncomplete() bool {
+	return s.Err != nil || s.SawError || !s.SawDone
 }
 
 // scanCCStream 驱动两条 CC 回退路径共享的 SSE 读循环：提取 data 行、在 [DONE]
@@ -298,6 +321,9 @@ func (s *OpenAIGatewayService) scanCCStream(
 		if payload == "[DONE]" {
 			st.SawDone = true
 			break
+		}
+		if gjson.Get(payload, "error").IsObject() {
+			st.SawError = true
 		}
 		// 观察上游 CC chunk 回显的 model / service_tier（计费以回显为准）。
 		// CC chunk 无 type 字段，按 untyped payload 观察（上游约束：只有终止

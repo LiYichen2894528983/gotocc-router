@@ -1,11 +1,16 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { announcementsAPI } from '@/api'
+import { adminSupportContext, supportRequestGeneration } from '@/utils/adminSupportContext'
 import type { UserAnnouncement } from '@/types'
+import { useAuthStore } from '@/stores/auth'
 
 const THROTTLE_MS = 20 * 60 * 1000 // 20 minutes
 
 export const useAnnouncementStore = defineStore('announcements', () => {
+  const auth = useAuthStore()
+  const identityScope = computed(() => `${auth.user?.id ?? ''}:${auth.user?.reseller_customer?.owner_id ?? ''}:${auth.user?.reseller_customer?.announcements_enabled ?? ''}`)
+  const requestScope = () => `${identityScope.value}:${supportRequestGeneration()}`
   // State
   const announcements = ref<UserAnnouncement[]>([])
   const loading = ref(false)
@@ -23,6 +28,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
 
   // Actions
   async function fetchAnnouncements(force = false) {
+    const scope = requestScope()
     const now = Date.now()
     if (!force && lastFetchTime.value > 0 && now - lastFetchTime.value < THROTTLE_MS) {
       return
@@ -34,18 +40,21 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     try {
       loading.value = true
       const all = await announcementsAPI.list(false)
+      if (scope !== requestScope()) return
       announcements.value = all.slice(0, 20)
       enqueueNewPopups()
     } catch (err: any) {
+      if (scope !== requestScope()) return
       // Revert throttle timestamp on failure so retry is allowed
       lastFetchTime.value = 0
       console.error('Failed to fetch announcements:', err)
     } finally {
-      loading.value = false
+      if (scope === requestScope()) loading.value = false
     }
   }
 
   function enqueueNewPopups() {
+    if (adminSupportContext.value) return
     const newPopups = announcements.value.filter(
       (a) => a.notify_mode === 'popup' && !a.read_at && !shownPopupIds.has(a.id)
     )
@@ -63,7 +72,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   function showNextPopup() {
-    if (popupQueue.value.length === 0) {
+    if (adminSupportContext.value || popupQueue.value.length === 0) {
       currentPopup.value = null
       return
     }
@@ -77,17 +86,21 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     currentPopup.value = null
 
     // Mark as read (fire-and-forget, UI already updated)
-    markAsRead(id)
+    if (!adminSupportContext.value) void markAsRead(id)
 
     // Show next popup after a short delay
     if (popupQueue.value.length > 0) {
-      setTimeout(() => showNextPopup(), 300)
+      const scope = requestScope()
+      setTimeout(() => { if (scope === requestScope()) showNextPopup() }, 300)
     }
   }
 
   async function markAsRead(id: number) {
+    if (adminSupportContext.value) return
+    const scope = requestScope()
     try {
       await announcementsAPI.markRead(id)
+      if (scope !== requestScope()) return
       const ann = announcements.value.find((a) => a.id === id)
       if (ann) {
         ann.read_at = new Date().toISOString()
@@ -98,17 +111,18 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   async function markAllAsRead() {
+    if (adminSupportContext.value) return
     const unread = announcements.value.filter((a) => !a.read_at)
     if (unread.length === 0) return
 
     try {
       loading.value = true
-      await Promise.all(unread.map((a) => announcementsAPI.markRead(a.id)))
-      announcements.value.forEach((a) => {
-        if (!a.read_at) {
-          a.read_at = new Date().toISOString()
-        }
-      })
+      const results = await Promise.allSettled(unread.map(async (a) => {
+        await announcementsAPI.markRead(a.id)
+        a.read_at = new Date().toISOString()
+      }))
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure) throw failure.reason
     } catch (err: any) {
       console.error('Failed to mark all as read:', err)
       throw err
@@ -125,6 +139,16 @@ export const useAnnouncementStore = defineStore('announcements', () => {
     currentPopup.value = null
     loading.value = false
   }
+
+  watch(adminSupportContext, (context) => {
+    reset()
+    if (context) void fetchAnnouncements(true)
+  }, { flush: 'sync' })
+
+  watch(identityScope, () => {
+    reset()
+    if (auth.user) void fetchAnnouncements(true)
+  }, { flush: 'sync' })
 
   return {
     // State

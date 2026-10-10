@@ -195,145 +195,29 @@ func (s *adminServiceImpl) assignDefaultSubscriptions(ctx context.Context, userI
 }
 
 func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *UpdateUserInput) (*User, error) {
-	// 校验用户专属分组倍率：必须 > 0（nil 合法，表示清除专属倍率）
-	if input.GroupRates != nil {
-		for groupID, rate := range input.GroupRates {
-			if rate != nil && *rate <= 0 {
-				return nil, fmt.Errorf("rate_multiplier must be > 0 (group_id=%d)", groupID)
-			}
-		}
+	if input.InviterChange == nil {
+		return s.updateUser(ctx, id, input)
 	}
-
-	user, err := s.userRepo.GetByID(ctx, id)
+	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	// Protect admin users: cannot disable admin accounts
-	if user.Role == "admin" && input.Status == "disabled" {
-		return nil, errors.New("cannot disable admin user")
-	}
-
-	oldConcurrency := user.Concurrency
-	oldStatus := user.Status
-	oldRole := user.Role
-	oldRPMLimit := user.RPMLimit
-	oldAllowedGroups := append([]int64(nil), user.AllowedGroups...)
-
-	// fields 与下面的 input.X 判空条件一一对应：管理员没提交的列不写回，
-	// 避免这份快照回滚并发的扣费、状态变更或批量限额调整。
-	var fields UserUpdateFields
-
-	if input.Email != "" {
-		user.Email = input.Email
-		fields.Email = true
-	}
-	if input.Password != "" {
-		if err := user.SetPassword(input.Password); err != nil {
-			return nil, err
-		}
-		fields.PasswordHash = true
-	}
-
-	if input.Username != nil {
-		user.Username = *input.Username
-		fields.Username = true
-	}
-	if input.Notes != nil {
-		user.Notes = *input.Notes
-		fields.Notes = true
-	}
-
-	if input.Status != "" {
-		user.Status = input.Status
-		fields.Status = true
-	}
-
-	// 角色变更(admin/user);空字符串表示不修改。
-	if input.Role != "" {
-		role, err := normalizeUserRole(input.Role, user.Role)
-		if err != nil {
-			return nil, err
-		}
-		// 防锁死保护：不允许降级系统中最后一个管理员（自我降级已在 handler 层拦截，
-		// 此处兜底覆盖跨管理员互降导致零 admin 的场景）。
-		if user.Role == RoleAdmin && role == RoleUser {
-			if err := s.ensureNotLastAdmin(ctx); err != nil {
-				return nil, err
-			}
-		}
-		user.Role = role
-		fields.Role = true
-	}
-
-	if input.Concurrency != nil {
-		user.Concurrency = *input.Concurrency
-		fields.Concurrency = true
-	}
-
-	if input.RPMLimit != nil {
-		user.RPMLimit = *input.RPMLimit
-		fields.RPMLimit = true
-	}
-
-	if input.AllowedGroups != nil {
-		user.AllowedGroups = *input.AllowedGroups
-		fields.AllowedGroups = true
-	}
-
-	oldRestrictPublicGroups := user.RestrictPublicGroups
-	if input.RestrictPublicGroups != nil {
-		user.RestrictPublicGroups = *input.RestrictPublicGroups
-		fields.RestrictPublicGroups = true
-	}
-
-	if err := s.userRepo.Update(ctx, user, fields); err != nil {
+	defer tx.Rollback()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := s.affiliateService.ChangeInviter(txCtx, id, input.InviterChange); err != nil {
 		return nil, err
 	}
-
-	// 角色变更属权限敏感操作，落审计日志（含操作者），便于事后追溯。
-	if user.Role != oldRole {
-		logger.LegacyPrintf("service.admin", "audit: user role changed actor_admin_id=%d target_user_id=%d old_role=%s new_role=%s",
-			input.ActorAdminID, user.ID, oldRole, user.Role)
+	result, err := s.updateUser(txCtx, id, input)
+	if err != nil {
+		return nil, err
 	}
-
-	// 同步用户专属分组倍率
-	if input.GroupRates != nil && s.userGroupRateRepo != nil {
-		if err := s.userGroupRateRepo.SyncUserGroupRates(ctx, user.ID, input.GroupRates); err != nil {
-			logger.LegacyPrintf("service.admin", "failed to sync user group rates: user_id=%d err=%v", user.ID, err)
-		}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
-
 	if s.authCacheInvalidator != nil {
-		// RPMLimit 直接参与 billing_cache_service.checkRPM 的三级级联，
-		// allowed_groups 参与 API Key 专属分组授权判断；不失效缓存会让修改在一个 L2 TTL 内失去效果。
-		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit || user.RestrictPublicGroups != oldRestrictPublicGroups || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
-			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
-		}
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
 	}
-
-	concurrencyDiff := user.Concurrency - oldConcurrency
-	if concurrencyDiff != 0 {
-		code, err := GenerateRedeemCode()
-		if err != nil {
-			logger.LegacyPrintf("service.admin", "failed to generate adjustment redeem code: %v", err)
-			return user, nil
-		}
-		adjustmentRecord := &RedeemCode{
-			Code:   code,
-			Type:   AdjustmentTypeAdminConcurrency,
-			Value:  float64(concurrencyDiff),
-			Status: StatusUsed,
-			UsedBy: &user.ID,
-		}
-		now := time.Now()
-		adjustmentRecord.UsedAt = &now
-		if err := s.redeemCodeRepo.Create(ctx, adjustmentRecord); err != nil {
-			logger.LegacyPrintf("service.admin", "failed to create concurrency adjustment redeem code: %v", err)
-		}
-	}
-
-	return user, nil
+	return result, nil
 }
 
 func sameInt64Set(a, b []int64) bool {
@@ -514,91 +398,70 @@ func (s *adminServiceImpl) BatchUpdateLimits(ctx context.Context, userIDs []int6
 }
 
 func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error) {
-	// 余额调整必须走原子接口：先读后整行写回会把并发的计费扣款覆盖掉。
-	var (
-		change BalanceChange
-		err    error
-	)
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if operation == "add" && s.affiliateService != nil {
+		if err := s.affiliateService.LockInviterBindings(txCtx); err != nil {
+			return nil, err
+		}
+	}
+	var change BalanceChange
 	switch operation {
 	case "set":
-		change, err = s.userRepo.SetBalance(ctx, userID, balance)
+		change, err = s.userRepo.SetBalance(txCtx, userID, balance)
 	case "add":
-		change, err = s.userRepo.AdjustBalance(ctx, userID, balance)
+		change, err = s.userRepo.AdjustBalance(txCtx, userID, balance)
 	case "subtract":
-		change, err = s.userRepo.AdjustBalance(ctx, userID, -balance)
+		change, err = s.userRepo.AdjustBalance(txCtx, userID, -balance)
 	default:
 		return nil, fmt.Errorf("unsupported balance operation: %q", operation)
 	}
-	if errors.Is(err, ErrBalanceNegative) {
-		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", change.Old, change.New)
-	}
 	if err != nil {
 		return nil, err
 	}
-
-	user, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
 	balanceDiff := change.New - change.Old
-	if s.authCacheInvalidator != nil && balanceDiff != 0 {
-		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
-	}
-	s.tryAccrueAffiliateRebateForAdminRecharge(ctx, userID, operation, balance)
-
-	if s.billingCacheService != nil {
-		go func() {
-			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := s.billingCacheService.InvalidateUserBalance(cacheCtx, userID); err != nil {
-				logger.LegacyPrintf("service.admin", "invalidate user balance cache failed: user_id=%d err=%v", userID, err)
-			}
-		}()
-	}
-
 	if balanceDiff != 0 {
 		code, err := GenerateRedeemCode()
 		if err != nil {
-			logger.LegacyPrintf("service.admin", "failed to generate adjustment redeem code: %v", err)
-			return user, nil
-		}
-
-		adjustmentRecord := &RedeemCode{
-			Code:   code,
-			Type:   AdjustmentTypeAdminBalance,
-			Value:  balanceDiff,
-			Status: StatusUsed,
-			UsedBy: &user.ID,
-			Notes:  notes,
+			return nil, err
 		}
 		now := time.Now()
-		adjustmentRecord.UsedAt = &now
-
-		if err := s.redeemCodeRepo.Create(ctx, adjustmentRecord); err != nil {
-			logger.LegacyPrintf("service.admin", "failed to create balance adjustment redeem code: %v", err)
+		record := &RedeemCode{Code: code, Type: AdjustmentTypeAdminBalance, Value: balanceDiff,
+			Status: StatusUsed, UsedBy: &userID, UsedAt: &now, Notes: notes}
+		if err := s.redeemCodeRepo.Create(txCtx, record); err != nil {
+			return nil, err
 		}
 	}
-
-	return user, nil
+	if err := s.tryAccrueAffiliateRebateForAdminRecharge(txCtx, userID, operation, balance); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if s.authCacheInvalidator != nil && balanceDiff != 0 {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	if s.billingCacheService != nil {
+		if err := s.billingCacheService.InvalidateUserBalance(ctx, userID); err != nil {
+			logger.LegacyPrintf("service.admin", "invalidate user balance cache failed: user_id=%d err=%v", userID, err)
+		}
+	}
+	return s.userRepo.GetByID(ctx, userID)
 }
 
-func (s *adminServiceImpl) tryAccrueAffiliateRebateForAdminRecharge(ctx context.Context, userID int64, operation string, amount float64) {
+func (s *adminServiceImpl) tryAccrueAffiliateRebateForAdminRecharge(ctx context.Context, userID int64, operation string, amount float64) error {
 	if operation != "add" || amount <= 0 || s.settingService == nil || s.affiliateService == nil {
-		return
+		return nil
 	}
 	if !s.settingService.IsAffiliateAdminRechargeEnabled(ctx) {
-		return
+		return nil
 	}
-
-	rebate, err := s.affiliateService.AccrueInviteRebate(ctx, userID, amount)
-	if err != nil {
-		logger.LegacyPrintf("service.admin", "affiliate rebate failed for admin recharge: user_id=%d amount=%.8f err=%v", userID, amount, err)
-		return
-	}
-	if rebate > 0 {
-		logger.LegacyPrintf("service.admin", "affiliate rebate accrued for admin recharge: user_id=%d amount=%.8f rebate=%.8f", userID, amount, rebate)
-	}
+	_, err := s.affiliateService.AccrueInviteRebate(ctx, userID, amount)
+	return err
 }
 
 func (s *adminServiceImpl) GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error) {

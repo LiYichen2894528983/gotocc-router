@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/reseller"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
 	"strings"
 	"time"
 )
@@ -29,10 +31,12 @@ var (
 	ErrOpenAIVideoTaskLeaseLost     = errors.New("openai video task lease lost")
 	ErrOpenAIVideoTaskIDMissing     = errors.New("upstream video task id is missing")
 	ErrOpenAIVideoSecondsInvalid    = errors.New("video seconds must be a positive integer")
-	ErrOpenAIVideoResolutionInvalid = errors.New("video size does not map to a configured billing resolution")
+	ErrOpenAIVideoResolutionInvalid = errors.New("video pricing is not configured for the requested resolution")
 )
 
 type OpenAIVideoTask struct {
+	TeamWallet            bool
+	ResellerSnapshot      *reseller.Snapshot `json:"-"`
 	ID                    int64
 	LocalRequestID        string
 	TaskID                *string
@@ -44,6 +48,7 @@ type OpenAIVideoTask struct {
 	ChannelID             *int64
 	AccountID             int64
 	SubscriptionID        *int64
+	ProviderConfig        *videoprotocol.Config
 	RequestedModel        string
 	UpstreamModel         string
 	RequestSeconds        int
@@ -81,6 +86,8 @@ type OpenAIVideoTask struct {
 }
 
 type CreateOpenAIVideoTaskParams struct {
+	TeamWallet            bool
+	ResellerSnapshot      *reseller.Snapshot `json:"-"`
 	LocalRequestID        string
 	ActorUserID           int64
 	BillingUserID         int64
@@ -90,6 +97,7 @@ type CreateOpenAIVideoTaskParams struct {
 	ChannelID             *int64
 	AccountID             int64
 	SubscriptionID        *int64
+	ProviderConfig        *videoprotocol.Config
 	RequestedModel        string
 	UpstreamModel         string
 	RequestSeconds        int
@@ -124,6 +132,9 @@ type OpenAIVideoTaskRepository interface {
 }
 
 type OpenAIVideoBalanceHoldCommand struct {
+	TeamWallet         bool
+	Model              string
+	ResellerSnapshot   *reseller.Snapshot `json:"-"`
 	TaskID             int64
 	LocalRequestID     string
 	APIKeyID           int64

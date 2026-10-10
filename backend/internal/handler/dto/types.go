@@ -3,6 +3,7 @@ package dto
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
 	"time"
 
 	"github.com/LuckyKuang/sub2api-plus/internal/domain"
@@ -10,19 +11,20 @@ import (
 )
 
 type User struct {
-	ID            int64      `json:"id"`
-	Email         string     `json:"email"`
-	Username      string     `json:"username"`
-	Role          string     `json:"role"`
-	Balance       float64    `json:"balance"`
-	FrozenBalance float64    `json:"frozen_balance"`
-	Concurrency   int        `json:"concurrency"`
-	Status        string     `json:"status"`
-	AllowedGroups []int64    `json:"allowed_groups"`
-	LastActiveAt  *time.Time `json:"last_active_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	ResellerCustomer *service.ResellerCustomerAccount `json:"reseller_customer,omitempty"`
+	ID               int64                            `json:"id"`
+	Email            string                           `json:"email"`
+	Username         string                           `json:"username"`
+	Role             string                           `json:"role"`
+	Balance          float64                          `json:"balance"`
+	FrozenBalance    float64                          `json:"frozen_balance"`
+	Concurrency      int                              `json:"concurrency"`
+	Status           string                           `json:"status"`
+	AllowedGroups    []int64                          `json:"allowed_groups"`
+	LastActiveAt     *time.Time                       `json:"last_active_at,omitempty"`
+	CreatedAt        time.Time                        `json:"created_at"`
+	UpdatedAt        time.Time                        `json:"updated_at"`
+	DeletedAt        *time.Time                       `json:"deleted_at,omitempty"`
 
 	// 余额不足通知
 	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
@@ -156,11 +158,11 @@ type Group struct {
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
-	// MaxReasoningEffort OpenAI/Codex 请求的推理强度上限，空字符串表示不限制。
+	// MaxReasoningEffort Anthropic/OpenAI 请求的推理强度上限，空字符串表示不限制。
 	MaxReasoningEffort string `json:"max_reasoning_effort"`
 	// MaxReasoningEffortOverLimit 超过上限时的访问控制：downgrade（默认）或 deny。
 	MaxReasoningEffortOverLimit string `json:"max_reasoning_effort_over_limit"`
-	// ReasoningEffortMappings OpenAI/Codex 推理强度映射，可按模型精确名、前缀或后缀限定。
+	// ReasoningEffortMappings Anthropic/OpenAI 推理强度映射，可按模型精确名、前缀或后缀限定。
 	ReasoningEffortMappings []domain.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -170,7 +172,13 @@ type Group struct {
 // AdminGroup 是管理员接口使用的 group DTO（包含敏感/内部字段）。
 // 注意：普通用户接口不得返回 model_routing/account_count/account_groups 等内部信息。
 type AdminGroup struct {
+	VideoModels videoprotocol.Models `json:"video_models"`
 	Group
+	QuotaResetSourceAccountID   *int64     `json:"quota_reset_source_account_id"`
+	QuotaResetSourceAccountName string     `json:"quota_reset_source_account_name"`
+	QuotaResetSourceResetAt     *time.Time `json:"quota_reset_source_reset_at"`
+	QuotaResetIncludeMonthly    bool       `json:"quota_reset_include_monthly"`
+	QuotaResetSourceStatus      string     `json:"quota_reset_source_status"`
 	// ForceOpenAIFast 是管理端请求策略，用户侧分组 DTO 无需暴露。
 	ForceOpenAIFast bool `json:"force_openai_fast"`
 	// FreeOpenAIFast 是管理端计费策略，用户侧分组 DTO 无需暴露。
@@ -194,7 +202,9 @@ type AdminGroup struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	DefaultMappedModel          string                                   `json:"default_mapped_model"`
 	MessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
-	ModelsListConfig            domain.GroupModelsListConfig             `json:"models_list_config"`
+	ModelAllowlist              service.GroupModelAllowlist              `json:"model_allowlist"`
+	// 固定账号获取 Codex Model Manifest 配置（仅 openai 平台使用）。
+	CodexModelsManifestConfig domain.GroupCodexModelsManifestConfig `json:"codex_models_manifest_config"`
 
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes    []string       `json:"supported_model_scopes"`
@@ -219,6 +229,7 @@ type Account struct {
 	CredentialsStatus       map[string]bool                `json:"credentials_status,omitempty"`
 	Extra                   map[string]any                 `json:"extra"`
 	OllamaCloudUsage        *service.OllamaCloudUsageState `json:"ollama_cloud_usage,omitempty"`
+	OpenCodeGoUsage         *service.OpenCodeGoUsageState  `json:"opencode_go_usage,omitempty"`
 	ProxyID                 *int64                         `json:"proxy_id"`
 	ProxyFallbackOriginID   *int64                         `json:"proxy_fallback_origin_id"`
 	ProxyFallbackOriginName *string                        `json:"proxy_fallback_origin_name,omitempty"`
@@ -327,6 +338,103 @@ type Account struct {
 	Groups   []*Group `json:"groups,omitempty"`
 }
 
+// AccountListItem is the compact representation returned by the admin account
+// list when the lite query parameter is enabled. It contains the fields used
+// by the account table and runtime indicators, but intentionally omits the
+// repeated account_groups and groups object graphs. Fetch /admin/accounts/:id
+// for the complete Account DTO when editing or inspecting an account.
+type AccountListItem struct {
+	ID       int64   `json:"id"`
+	Name     string  `json:"name"`
+	Notes    *string `json:"notes"`
+	Platform string  `json:"platform"`
+	Type     string  `json:"type"`
+
+	Credentials       map[string]any                 `json:"credentials,omitempty"`
+	CredentialsStatus map[string]bool                `json:"credentials_status,omitempty"`
+	Extra             map[string]any                 `json:"extra,omitempty"`
+	OllamaCloudUsage  *service.OllamaCloudUsageState `json:"ollama_cloud_usage,omitempty"`
+	OpenCodeGoUsage   *service.OpenCodeGoUsageState  `json:"opencode_go_usage,omitempty"`
+
+	ProxyID                 *int64     `json:"proxy_id"`
+	ProxyFallbackOriginID   *int64     `json:"proxy_fallback_origin_id"`
+	ProxyFallbackOriginName *string    `json:"proxy_fallback_origin_name,omitempty"`
+	Concurrency             int        `json:"concurrency"`
+	LoadFactor              *int       `json:"load_factor,omitempty"`
+	Priority                int        `json:"priority"`
+	RateMultiplier          float64    `json:"rate_multiplier"`
+	Status                  string     `json:"status"`
+	ErrorMessage            string     `json:"error_message"`
+	LastUsedAt              *time.Time `json:"last_used_at"`
+	ExpiresAt               *int64     `json:"expires_at"`
+	AutoPauseOnExpired      bool       `json:"auto_pause_on_expired"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+
+	Schedulable bool `json:"schedulable"`
+
+	RateLimitedAt    *time.Time `json:"rate_limited_at"`
+	RateLimitResetAt *time.Time `json:"rate_limit_reset_at"`
+	OverloadUntil    *time.Time `json:"overload_until"`
+
+	TempUnschedulableUntil  *time.Time `json:"temp_unschedulable_until"`
+	TempUnschedulableReason string     `json:"temp_unschedulable_reason"`
+
+	SessionWindowStart  *time.Time `json:"session_window_start"`
+	SessionWindowEnd    *time.Time `json:"session_window_end"`
+	SessionWindowStatus string     `json:"session_window_status"`
+
+	WindowCostLimit         *float64 `json:"window_cost_limit,omitempty"`
+	WindowCostStickyReserve *float64 `json:"window_cost_sticky_reserve,omitempty"`
+	MaxSessions             *int     `json:"max_sessions,omitempty"`
+	SessionIdleTimeoutMin   *int     `json:"session_idle_timeout_minutes,omitempty"`
+	BaseRPM                 *int     `json:"base_rpm,omitempty"`
+	RPMStrategy             *string  `json:"rpm_strategy,omitempty"`
+	RPMStickyBuffer         *int     `json:"rpm_sticky_buffer,omitempty"`
+	UserMsgQueueMode        *string  `json:"user_msg_queue_mode,omitempty"`
+	EnableTLSFingerprint    *bool    `json:"enable_tls_fingerprint,omitempty"`
+	TLSFingerprintProfileID *int64   `json:"tls_fingerprint_profile_id,omitempty"`
+	EnableSessionIDMasking  *bool    `json:"session_id_masking_enabled,omitempty"`
+	CacheTTLOverrideEnabled *bool    `json:"cache_ttl_override_enabled,omitempty"`
+	CacheTTLOverrideTarget  *string  `json:"cache_ttl_override_target,omitempty"`
+	CustomBaseURLEnabled    *bool    `json:"custom_base_url_enabled,omitempty"`
+	CustomBaseURL           *string  `json:"custom_base_url,omitempty"`
+
+	QuotaLimit       *float64 `json:"quota_limit,omitempty"`
+	QuotaUsed        *float64 `json:"quota_used,omitempty"`
+	QuotaDailyLimit  *float64 `json:"quota_daily_limit,omitempty"`
+	QuotaDailyUsed   *float64 `json:"quota_daily_used,omitempty"`
+	QuotaWeeklyLimit *float64 `json:"quota_weekly_limit,omitempty"`
+	QuotaWeeklyUsed  *float64 `json:"quota_weekly_used,omitempty"`
+
+	QuotaDailyResetMode  *string `json:"quota_daily_reset_mode,omitempty"`
+	QuotaDailyResetHour  *int    `json:"quota_daily_reset_hour,omitempty"`
+	QuotaWeeklyResetMode *string `json:"quota_weekly_reset_mode,omitempty"`
+	QuotaWeeklyResetDay  *int    `json:"quota_weekly_reset_day,omitempty"`
+	QuotaWeeklyResetHour *int    `json:"quota_weekly_reset_hour,omitempty"`
+	QuotaResetTimezone   *string `json:"quota_reset_timezone,omitempty"`
+	QuotaDailyResetAt    *string `json:"quota_daily_reset_at,omitempty"`
+	QuotaWeeklyResetAt   *string `json:"quota_weekly_reset_at,omitempty"`
+
+	QuotaNotifyDailyEnabled    *bool    `json:"quota_notify_daily_enabled,omitempty"`
+	QuotaNotifyDailyThreshold  *float64 `json:"quota_notify_daily_threshold,omitempty"`
+	QuotaNotifyWeeklyEnabled   *bool    `json:"quota_notify_weekly_enabled,omitempty"`
+	QuotaNotifyWeeklyThreshold *float64 `json:"quota_notify_weekly_threshold,omitempty"`
+	QuotaNotifyTotalEnabled    *bool    `json:"quota_notify_total_enabled,omitempty"`
+	QuotaNotifyTotalThreshold  *float64 `json:"quota_notify_total_threshold,omitempty"`
+
+	ParentAccountID             *int64 `json:"parent_account_id,omitempty"`
+	QuotaDimension              string `json:"quota_dimension,omitempty"`
+	ParentEmail                 string `json:"parent_email,omitempty"`
+	ParentPlanType              string `json:"parent_plan_type,omitempty"`
+	ParentPrivacyMode           string `json:"parent_privacy_mode,omitempty"`
+	ParentSubscriptionExpiresAt string `json:"parent_subscription_expires_at,omitempty"`
+	ParentChatGPTAccountID      string `json:"parent_chatgpt_account_id,omitempty"`
+
+	Proxy    *Proxy  `json:"proxy,omitempty"`
+	GroupIDs []int64 `json:"group_ids,omitempty"`
+}
+
 type AccountGroup struct {
 	AccountID int64     `json:"account_id"`
 	GroupID   int64     `json:"group_id"`
@@ -353,6 +461,8 @@ type Proxy struct {
 	FallbackMode   string     `json:"fallback_mode"`
 	BackupProxyID  *int64     `json:"backup_proxy_id"`
 	ExpiryWarnDays int        `json:"expiry_warn_days"`
+	EgressTimezone string     `json:"egress_timezone"`
+	EgressCountry  string     `json:"egress_country"`
 }
 
 type ProxyWithAccountCount struct {
@@ -559,6 +669,7 @@ type UsageLog struct {
 	DurationMs         *int    `json:"duration_ms"`
 	FirstTokenMs       *int    `json:"first_token_ms"`
 	LastTokenMs        *int    `json:"last_token_ms"`
+	TimingVersion      int     `json:"timing_version"`
 	FirstOutputMs      *int    `json:"first_output_ms"`
 	FirstOutputKind    *string `json:"first_output_kind"`
 	IsComplete         *bool   `json:"is_complete"`
@@ -619,6 +730,8 @@ type AdminUsageLog struct {
 	ChannelID *int64 `json:"channel_id,omitempty"`
 	// ModelMappingChain 模型映射链，如 "a→b→c"
 	ModelMappingChain *string `json:"model_mapping_chain,omitempty"`
+	// UpstreamRequestID 是直接上游声明的请求标识，仅管理端可见。
+	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 

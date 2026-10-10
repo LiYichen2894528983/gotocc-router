@@ -3,6 +3,7 @@
 package service
 
 import (
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/brandidentity"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,6 +19,83 @@ func headerOverrideTestAccount(platform, accountType string, credentials map[str
 	}
 }
 
+// Keep this wire contract explicit so additions to the managed declaration set
+// require corresponding save/runtime and outbound-path regression coverage.
+var managedIdentityOverrideTestNames = []string{
+	"User-Agent", "Originator", "Version", "X-App", "X-Goog-Api-Client",
+	"X-Grok-Client-Version", "X-Grok-Client-Identifier", "X-Grok-Client-Mode",
+	"X-Grok-Client-Surface", "X-XAI-Token-Auth", "X-AuthenticateResponse", "X-Grok-Req-Id",
+	"X-Grok-Session-Id", "X-Grok-Agent-Id", "X-Grok-Conv-Group-Id",
+	"X-Grok-Model-Override", "X-Grok-User-Id", "X-Grok-Deployment-Id",
+	"X-Grok-Turn-Idx", "X-Grok-Transient-Retry", "X-UserID", "X-Email",
+	"X-Stainless-Lang",
+	"X-Stainless-Package-Version", "X-Stainless-OS", "X-Stainless-Arch",
+	"X-Stainless-Runtime", "X-Stainless-Runtime-Version",
+	// The Kimi Code declaration block. Its request-state companion
+	// (X-Msh-Tool-Call-Id) is deliberately absent: only the client identity
+	// block is a managed declaration.
+	"X-Msh-Platform", "X-Msh-Version", "X-Msh-Device-Name",
+	"X-Msh-Device-Model", "X-Msh-Os-Version", "X-Msh-Device-Id",
+	"X-Step-Client",
+	"X-ZCode-App-Version", "X-ZCode-Agent", "HTTP-Referer", "X-Title",
+	"X-Release-Channel", "X-Client-Language", "X-Client-Timezone",
+	"X-Platform", "X-Os-Category", "X-Os-Version",
+	"X-Device-Mid", "X-Client-Bundle-Id", "X-Client-Platform", "X-Client-Version", "X-Client-Locale", "X-Client-Timezone-Offset",
+}
+
+func TestHeaderOverrideRejectsManagedIdentity(t *testing.T) {
+	for _, name := range managedIdentityOverrideTestNames {
+		t.Run(name, func(t *testing.T) {
+			for _, variant := range []string{name, strings.ToLower(name), strings.ToUpper(name)} {
+				for _, enabled := range []bool{false, true} {
+					for _, value := range []string{"", "injected/999.0.0"} {
+						err := NormalizeHeaderOverrideCredentials(map[string]any{
+							credKeyHeaderOverrideEnabled: enabled,
+							credKeyHeaderOverrides:       map[string]any{variant: value},
+						})
+						requireApplicationErrorReason(t, err, "INVALID_HEADER_OVERRIDE")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHeaderOverrideIgnoresLegacyManagedIdentity(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformGrok} {
+		for _, stringMap := range []bool{false, true} {
+			t.Run(platform+map[bool]string{false: "/json", true: "/string-map"}[stringMap], func(t *testing.T) {
+				entries := map[string]any{"X-Route": "retained", "anthropic-beta": "test-capability"}
+				for _, name := range managedIdentityOverrideTestNames {
+					entries[strings.ToUpper(name)] = "injected/999.0.0"
+				}
+				var raw any = entries
+				if stringMap {
+					values := map[string]string{}
+					for name, value := range entries {
+						values[name] = value.(string)
+					}
+					raw = values
+				}
+				account := headerOverrideTestAccount(platform, AccountTypeAPIKey, map[string]any{
+					credKeyHeaderOverrideEnabled: true, credKeyHeaderOverrides: raw,
+				})
+				for range 2 { // Cached and uncached reads must both filter old data.
+					require.Equal(t, map[string]string{"x-route": "retained", "anthropic-beta": "test-capability"}, account.GetHeaderOverrides())
+					headers := http.Header{"User-Agent": {"trusted-client/1.0"}, "Authorization": {"Bearer retained"}}
+					account.ApplyHeaderOverrides(headers)
+					require.Equal(t, "trusted-client/1.0", headers.Get("User-Agent"))
+					require.Equal(t, "Bearer retained", headers.Get("Authorization"))
+					require.Equal(t, "retained", getHeaderRaw(headers, "x-route"))
+					for _, name := range managedIdentityOverrideTestNames[1:] {
+						require.Empty(t, getHeaderRaw(headers, name), name)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestIsHeaderOverrideEligible(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -30,11 +108,13 @@ func TestIsHeaderOverrideEligible(t *testing.T) {
 		{"kimi apikey", PlatformKimi, AccountTypeAPIKey, true},
 		{"zhipu apikey", PlatformZhipu, AccountTypeAPIKey, true},
 		{"deepseek apikey", PlatformDeepseek, AccountTypeAPIKey, true},
+		{"opencode go apikey", PlatformOpenCodeGo, AccountTypeAPIKey, true},
 		{"anthropic oauth", PlatformAnthropic, AccountTypeOAuth, false},
 		{"openai oauth", PlatformOpenAI, AccountTypeOAuth, false},
 		{"kimi oauth", PlatformKimi, AccountTypeOAuth, false},
 		{"zhipu oauth", PlatformZhipu, AccountTypeOAuth, false},
 		{"deepseek oauth", PlatformDeepseek, AccountTypeOAuth, false},
+		{"opencode go oauth", PlatformOpenCodeGo, AccountTypeOAuth, false},
 		{"gemini apikey", PlatformGemini, AccountTypeAPIKey, false},
 		{"grok apikey", PlatformGrok, AccountTypeAPIKey, true},
 		{"grok oauth", PlatformGrok, AccountTypeOAuth, true},
@@ -82,8 +162,8 @@ func TestGetHeaderOverrides(t *testing.T) {
 	acc := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
 		credKeyHeaderOverrides: map[string]any{
-			"User-Agent":    "my-agent/1.0",  // 大写 key 归一化为小写
-			" X-App ":       "cli",           // 名称去空白
+			"X-Route":       "primary",       // 大写 key 归一化为小写
+			" X-Custom ":    "cli",           // 名称去空白
 			"x-empty":       "",              // 空 value（模板占位）跳过
 			"authorization": "Bearer leaked", // 禁止覆写的头跳过
 			"bad name":      "value",         // 非法 header 名跳过
@@ -92,9 +172,9 @@ func TestGetHeaderOverrides(t *testing.T) {
 	})
 	overrides := acc.GetHeaderOverrides()
 	require.Equal(t, map[string]string{
-		"user-agent": "my-agent/1.0",
-		"x-app":      "cli",
-		"x-padded":   "padded",
+		"x-route":  "primary",
+		"x-custom": "cli",
+		"x-padded": "padded",
 	}, overrides)
 
 	// 未启用时返回 nil
@@ -106,7 +186,7 @@ func TestGetHeaderOverrides(t *testing.T) {
 	// 启用但全部为空 value 时返回 nil
 	empty := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
-		credKeyHeaderOverrides:       map[string]any{"user-agent": ""},
+		credKeyHeaderOverrides:       map[string]any{"x-custom": ""},
 	})
 	require.Nil(t, empty.GetHeaderOverrides())
 
@@ -143,8 +223,8 @@ func TestApplyHeaderOverrides(t *testing.T) {
 
 	acc.ApplyHeaderOverrides(h)
 
-	// user-agent 覆盖且只有一个值（已知头恢复 wire casing）
-	require.Equal(t, []string{"override-agent/2.0"}, h["User-Agent"])
+	// 通用覆写不能替换身份模块设置的 UA。
+	require.Equal(t, []string{"claude-cli/2.1.161 (external, cli)"}, h["User-Agent"])
 	// anthropic-beta：非 canonical 旧值被清除，写入 wire casing（小写）
 	require.Equal(t, []string{"custom-beta-1"}, h["anthropic-beta"])
 	require.Empty(t, h["Anthropic-Beta"])
@@ -162,6 +242,25 @@ func TestApplyHeaderOverrides(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, count)
+}
+
+// A legacy stored body-encoding override (saved before the header was reserved)
+// is filtered at runtime, so a generic override can never forge the
+// compression-owned declaration.
+func TestApplyHeaderOverridesIgnoresLegacyContentEncoding(t *testing.T) {
+	acc := headerOverrideTestAccount(PlatformGrok, AccountTypeOAuth, map[string]any{
+		credKeyHeaderOverrideEnabled: true,
+		credKeyHeaderOverrides: map[string]any{
+			"content-encoding": "gzip",
+			"x-custom":         "custom-value",
+		},
+	})
+
+	h := http.Header{}
+	acc.ApplyHeaderOverrides(h)
+
+	require.Empty(t, h.Get("Content-Encoding"))
+	require.Equal(t, "custom-value", getHeaderRaw(h, "x-custom"))
 }
 
 func TestApplyHeaderOverridesNoOpPaths(t *testing.T) {
@@ -209,20 +308,23 @@ func TestApplyHeaderOverridesNoOpPaths(t *testing.T) {
 	blocked.ApplyHeaderOverrides(nil)
 }
 
-func TestApplyHeaderOverridesAlwaysStripsOutboundIdentity(t *testing.T) {
+func TestApplyHeaderOverridesCannotAllowBrandedIdentityOnWire(t *testing.T) {
 	account := headerOverrideTestAccount(PlatformOpenAI, AccountTypeOAuth, nil)
 	header := http.Header{
-		"User-Agent":                   {"sub2api-client/1"},
-		"X-Sub2API-Trace":              {"internal"},
-		grokClientToolCacheOptInHeader: {"prefer-cache"},
-		"X-Grok-Conv-Id":               {"conversation"},
+		"User-Agent":               {"sub2api-client/1"},
+		"X-Sub2API-Trace":          {"internal"},
+		"X-Grok-Client-Tool-Cache": {"prefer-cache"},
+		"X-Grok-Conv-Id":           {"conversation"},
 	}
 
 	account.ApplyHeaderOverrides(header)
 
-	require.Empty(t, header.Get("User-Agent"))
+	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	require.NoError(t, err)
+	req.Header = header
+	require.ErrorIs(t, brandidentity.FilterOutboundRequest(req), brandidentity.ErrBrandedOutboundHeader, "must not strip UA then let the HTTP stack send its own identity")
 	require.Empty(t, header.Get("X-Sub2API-Trace"))
-	require.Empty(t, header.Get(grokClientToolCacheOptInHeader))
+	require.Equal(t, "prefer-cache", header.Get("X-Grok-Client-Tool-Cache"), "ordinary extra header has no local control semantics")
 	require.Equal(t, "conversation", header.Get("X-Grok-Conv-Id"))
 
 	apiKey := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, map[string]any{
@@ -252,24 +354,24 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 		creds := map[string]any{
 			credKeyHeaderOverrideEnabled: true,
 			credKeyHeaderOverrides: map[string]any{
-				" User-Agent ": " my-agent ",
-				"X-App":        "",
-				"":             "", // 完全空行被丢弃
+				" X-Route ": " my-agent ",
+				"X-Custom":  "",
+				"":          "", // 完全空行被丢弃
 			},
 		}
 		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
 		require.Equal(t, map[string]any{
-			"user-agent": "my-agent",
-			"x-app":      "",
+			"x-route":  "my-agent",
+			"x-custom": "",
 		}, creds[credKeyHeaderOverrides])
 	})
 
 	t.Run("accepts map[string]string input", func(t *testing.T) {
 		creds := map[string]any{
-			credKeyHeaderOverrides: map[string]string{"X-App": "cli"},
+			credKeyHeaderOverrides: map[string]string{"X-Custom": "cli"},
 		}
 		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
-		require.Equal(t, map[string]any{"x-app": "cli"}, creds[credKeyHeaderOverrides])
+		require.Equal(t, map[string]any{"x-custom": "cli"}, creds[credKeyHeaderOverrides])
 	})
 
 	t.Run("rejects non-bool enabled", func(t *testing.T) {
@@ -281,14 +383,14 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 
 	t.Run("rejects non-object overrides", func(t *testing.T) {
 		err := NormalizeHeaderOverrideCredentials(map[string]any{
-			credKeyHeaderOverrides: []any{"user-agent"},
+			credKeyHeaderOverrides: []any{"x-route"},
 		})
 		require.Error(t, err)
 	})
 
 	t.Run("rejects non-string value", func(t *testing.T) {
 		err := NormalizeHeaderOverrideCredentials(map[string]any{
-			credKeyHeaderOverrides: map[string]any{"x-app": 123},
+			credKeyHeaderOverrides: map[string]any{"x-custom": 123},
 		})
 		require.Error(t, err)
 	})
@@ -312,10 +414,12 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 	t.Run("rejects blocked headers", func(t *testing.T) {
 		for _, name := range []string{
 			"Authorization", "x-api-key", "Host", "content-length", "Transfer-Encoding",
-			"connection", "accept-encoding", "Sec-WebSocket-Key", "session-id", "session_id", "thread-id",
+			"connection", "accept-encoding", "content-encoding", "Sec-WebSocket-Key", "session-id", "session_id", "thread-id",
 			"conversation_id", "x-codex-turn-state", "chatgpt-account-id",
 			"Content-Type", "Cookie", "x-goog-api-key",
 			"X-Claude-Code-Session-Id", "x-client-request-id",
+			"x-openai-subagent", "x-openai-memgen-request", "x-responsesapi-include-timing-metrics",
+			"x-openai-internal-codex-residency",
 		} {
 			err := NormalizeHeaderOverrideCredentials(map[string]any{
 				credKeyHeaderOverrides: map[string]any{name: "v"},
@@ -331,32 +435,31 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("rejects local gateway control header", func(t *testing.T) {
+	t.Run("allows ordinary extra header without gateway control semantics", func(t *testing.T) {
 		err := NormalizeHeaderOverrideCredentials(map[string]any{
-			credKeyHeaderOverrides: map[string]any{grokClientToolCacheOptInHeader: "prefer-cache"},
+			credKeyHeaderOverrides: map[string]any{"X-Grok-Client-Tool-Cache": "prefer-cache"},
 		})
-		require.Error(t, err)
+		require.NoError(t, err)
 	})
 
-	t.Run("allows product name in ordinary value", func(t *testing.T) {
+	t.Run("rejects product name in ordinary value", func(t *testing.T) {
 		creds := map[string]any{
 			credKeyHeaderOverrides: map[string]any{"X-Organization": "Sub2API Plus"},
 		}
-		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
-		require.Equal(t, map[string]any{"x-organization": "Sub2API Plus"}, creds[credKeyHeaderOverrides])
+		require.Error(t, NormalizeHeaderOverrideCredentials(creds))
 	})
 
 	t.Run("allows tab inside value", func(t *testing.T) {
 		creds := map[string]any{
-			credKeyHeaderOverrides: map[string]any{"x-app": "a\tb"},
+			credKeyHeaderOverrides: map[string]any{"x-custom": "a\tb"},
 		}
 		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
-		require.Equal(t, map[string]any{"x-app": "a\tb"}, creds[credKeyHeaderOverrides])
+		require.Equal(t, map[string]any{"x-custom": "a\tb"}, creds[credKeyHeaderOverrides])
 	})
 
 	t.Run("rejects invalid value", func(t *testing.T) {
 		err := NormalizeHeaderOverrideCredentials(map[string]any{
-			credKeyHeaderOverrides: map[string]any{"x-app": "bad\nvalue"},
+			credKeyHeaderOverrides: map[string]any{"x-custom": "bad\nvalue"},
 		})
 		require.Error(t, err)
 	})
@@ -364,8 +467,8 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 	t.Run("rejects duplicate names case-insensitively", func(t *testing.T) {
 		err := NormalizeHeaderOverrideCredentials(map[string]any{
 			credKeyHeaderOverrides: map[string]any{
-				"User-Agent": "a",
-				"user-agent": "b",
+				"X-Route": "a",
+				"x-route": "b",
 			},
 		})
 		require.Error(t, err)
@@ -388,7 +491,7 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 			big[i] = 'a'
 		}
 		err := NormalizeHeaderOverrideCredentials(map[string]any{
-			credKeyHeaderOverrides: map[string]any{"x-app": string(big)},
+			credKeyHeaderOverrides: map[string]any{"x-custom": string(big)},
 		})
 		require.Error(t, err)
 	})

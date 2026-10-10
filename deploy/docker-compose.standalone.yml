@@ -47,6 +47,14 @@ services:
       - SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL=${SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL:-false}
       - UPDATE_GITHUB_TOKEN=${UPDATE_GITHUB_TOKEN:-}
 
+      # OpenAI OAuth credential-plane overrides (optional, official-aligned).
+      # CODEX_CA_CERTIFICATE takes precedence over SSL_CERT_FILE. Only OpenAI
+      # outbound clients read these names; other providers use system roots.
+      - CODEX_CA_CERTIFICATE=${CODEX_CA_CERTIFICATE:-}
+      - SSL_CERT_FILE=${SSL_CERT_FILE:-}
+      - CODEX_REFRESH_TOKEN_URL_OVERRIDE=${CODEX_REFRESH_TOKEN_URL_OVERRIDE:-}
+      - CODEX_REVOKE_TOKEN_URL_OVERRIDE=${CODEX_REVOKE_TOKEN_URL_OVERRIDE:-}
+
       # WebAuthn deployment boundary. The administrator must still enable
       # Passkey in system settings after these values pass validation.
       - WEBAUTHN_ENABLED=${WEBAUTHN_ENABLED:-false}
@@ -83,7 +91,7 @@ services:
       # =======================================================================
       # Admin Account (auto-created on first run)
       # =======================================================================
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@sub2api.local}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 
       # =======================================================================
@@ -106,6 +114,11 @@ services:
       # Gemini OAuth Configuration (optional)
       # =======================================================================
       - GEMINI_OAUTH_CLIENT_ID=${GEMINI_OAUTH_CLIENT_ID:-}
+      - ZHIPU_OAUTH_BASE_URL=${ZHIPU_OAUTH_BASE_URL:-}
+      - ZHIPU_OFFPEAK_BASE_URL=${ZHIPU_OFFPEAK_BASE_URL:-}
+      - ZHIPU_BIGMODEL_ORIGIN=${ZHIPU_BIGMODEL_ORIGIN:-}
+      - ZHIPU_ZAI_ORIGIN=${ZHIPU_ZAI_ORIGIN:-}
+      - SUB2API_ZCODE_VERSION=${SUB2API_ZCODE_VERSION:-}
       - GEMINI_OAUTH_CLIENT_SECRET=${GEMINI_OAUTH_CLIENT_SECRET:-}
       - GEMINI_OAUTH_SCOPES=${GEMINI_OAUTH_SCOPES:-}
       - GEMINI_QUOTA_POLICY=${GEMINI_QUOTA_POLICY:-}
@@ -122,7 +135,8 @@ services:
       # Gateway values come from Compose .env or the shell.
       # Fallbacks mirror Sub2API backend defaults so omitted values preserve behavior.
       - GATEWAY_FORCE_CODEX_CLI=${GATEWAY_FORCE_CODEX_CLI:-false}
-      - GATEWAY_OPENAI_COMPACT_MODEL=${GATEWAY_OPENAI_COMPACT_MODEL:-gpt-5.4}
+      - GATEWAY_OPENAI_COMPACT_MODEL=${GATEWAY_OPENAI_COMPACT_MODEL:-gpt-5.5}
+      - SUB2API_IMAGES_MAIN_MODEL=${SUB2API_IMAGES_MAIN_MODEL:-gpt-5.6-luna}
       - GATEWAY_OPENAI_RESPONSE_HEADER_TIMEOUT=${GATEWAY_OPENAI_RESPONSE_HEADER_TIMEOUT:-0}
       - GATEWAY_OPENAI_WS_FORCE_HTTP=${GATEWAY_OPENAI_WS_FORCE_HTTP:-false}
       - GATEWAY_OPENAI_HTTP2_ENABLED=${GATEWAY_OPENAI_HTTP2_ENABLED:-true}
@@ -134,6 +148,9 @@ services:
       - GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_FAILURE_THRESHOLD=${GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_FAILURE_THRESHOLD:-2}
       - GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_WINDOW_SECONDS=${GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_WINDOW_SECONDS:-60}
       - GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_TTL_SECONDS=${GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_TTL_SECONDS:-600}
+      # Grok negotiated zstd request compression (kill switch; requires an
+      # exact-target cli-chat-proxy /v1/settings capability advertisement).
+      - GATEWAY_GROK_REQUEST_COMPRESSION_ENABLED=${GATEWAY_GROK_REQUEST_COMPRESSION_ENABLED:-true}
       - GATEWAY_MAX_BODY_SIZE=${GATEWAY_MAX_BODY_SIZE:-268435456}
       - GATEWAY_MAX_CONNS_PER_HOST=${GATEWAY_MAX_CONNS_PER_HOST:-1024}
       - GATEWAY_MAX_IDLE_CONNS=${GATEWAY_MAX_IDLE_CONNS:-2560}

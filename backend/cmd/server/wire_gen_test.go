@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package main
 
 import (
@@ -51,6 +53,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	opsSystemLogSinkSvc := service.NewOpsSystemLogSink(nil)
 
 	cleanup := provideCleanup(
+		nil, // service status worker
 		nil, // entClient
 		nil, // redis
 		&service.OpsMetricsCollector{},
@@ -85,6 +88,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		geminiOAuthSvc,
 		antigravityOAuthSvc,
 		nil, // grokOAuth
+		nil, // zhipuOffPeakTickets
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
 		nil, // backupSvc
@@ -96,6 +100,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // usageAlert
 		nil, // auditLog
 		nil, // openAIAutoReset
+		nil, // openAIGroupQuotaFollowReset
 		nil, // promptAudit
 		nil, // pluginManager
 	)

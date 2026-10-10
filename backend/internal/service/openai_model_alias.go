@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/openai"
+)
 
 func lastOpenAIModelSegment(model string) string {
 	model = strings.TrimSpace(model)
@@ -15,38 +19,7 @@ func lastOpenAIModelSegment(model string) string {
 }
 
 func canonicalizeOpenAIModelAliasSpelling(model string) string {
-	model = strings.ToLower(lastOpenAIModelSegment(model))
-	if model == "" {
-		return ""
-	}
-
-	normalized := strings.ReplaceAll(model, "_", "-")
-	normalized = strings.Join(strings.Fields(normalized), "-")
-	for strings.Contains(normalized, "--") {
-		normalized = strings.ReplaceAll(normalized, "--", "-")
-	}
-
-	if strings.HasPrefix(normalized, "gpt5") {
-		normalized = "gpt-5" + strings.TrimPrefix(normalized, "gpt5")
-	}
-	if !strings.HasPrefix(normalized, "gpt-") && !strings.Contains(normalized, "codex") {
-		return ""
-	}
-
-	replacements := []struct {
-		from string
-		to   string
-	}{
-		{"gpt-5.4mini", "gpt-5.4-mini"},
-		{"gpt-5.4nano", "gpt-5.4-nano"},
-		{"gpt-5.3-codexspark", "gpt-5.3-codex-spark"},
-		{"gpt-5.3codexspark", "gpt-5.3-codex-spark"},
-		{"gpt-5.3codex", "gpt-5.3-codex"},
-	}
-	for _, replacement := range replacements {
-		normalized = strings.ReplaceAll(normalized, replacement.from, replacement.to)
-	}
-	return normalized
+	return openai.CanonicalizeOpenAIModelAliasSpelling(model)
 }
 
 func normalizeKnownOpenAICodexModel(model string) string {
@@ -64,7 +37,21 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		}
 	}
 
+	if openai.IsGPT61SolModelSpelling(normalized) {
+		return "gpt-6.1-sol"
+	}
+	if openai.IsGPT6SolOrLunaModelSpelling(normalized) {
+		if strings.HasPrefix(normalized, "gpt-6-sol") {
+			return "gpt-6-sol"
+		}
+		return "gpt-6-luna"
+	}
+
 	switch {
+	case isOpenAIGPT6AstraModel(normalized):
+		return "gpt-6-astra"
+	case normalized == "gpt-6-sol", normalized == "gpt-6-luna":
+		return normalized
 	case strings.Contains(normalized, "gpt-5.6-sol"):
 		return "gpt-5.6-sol"
 	case strings.Contains(normalized, "gpt-5.6-terra"):
@@ -124,6 +111,13 @@ func isOpenAIGPT56Model(model string) bool {
 	return false
 }
 
+// isOpenAIGPT6AstraModel recognizes only OpenAI's canonical Astra model ID.
+// Reasoning levels and future snapshots are request/catalog metadata, not
+// aliases for model names that OpenAI has not published.
+func isOpenAIGPT6AstraModel(model string) bool {
+	return canonicalizeOpenAIModelAliasSpelling(model) == "gpt-6-astra"
+}
+
 func appendUsageBillingModelCandidate(candidates []string, seen map[string]struct{}, model string) []string {
 	trimmed := strings.TrimSpace(model)
 	if trimmed == "" {
@@ -168,4 +162,8 @@ func firstUsageBillingModel(candidates []string) string {
 		}
 	}
 	return ""
+}
+
+func isOpenAIGPT6Model(model string) bool {
+	return isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model)
 }

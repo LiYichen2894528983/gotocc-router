@@ -2,15 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode, showErrorMock } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
+  showErrorMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
+vi.mock('@/components/account/OutboundIdentityEditor.vue', () => ({ default: { template: '<div />' } }))
+
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showInfo: vi.fn()
   })
@@ -120,6 +123,7 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
     updateAccountMock.mockReset()
+    showErrorMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
   })
@@ -206,9 +210,7 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     const account = buildGrokOAuthAccount({
       header_override_enabled: true,
       header_overrides: {
-        'user-agent': 'grok-pager/0.2.93',
-        'x-grok-client-identifier': 'grok-pager',
-        'x-grok-client-version': '0.2.93',
+        'x-route': 'primary',
         'x-xai-token-auth': 'xai-grok-cli'
       }
     })
@@ -222,105 +224,46 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     const payload = updateAccountMock.mock.calls[0]?.[1]
     expect(payload?.credentials?.header_override_enabled).toBe(true)
     expect(payload?.credentials?.header_overrides).toEqual({
-      'user-agent': 'grok-pager/0.2.93',
-      'x-grok-client-identifier': 'grok-pager',
-      'x-grok-client-version': '0.2.93',
+      'x-route': 'primary',
       'x-xai-token-auth': 'xai-grok-cli'
     })
   })
 
-  it('shows the client-tool cache switch only for Grok OAuth accounts', () => {
-    const grokOAuthWrapper = mountModal(buildGrokOAuthAccount())
-    expect(grokOAuthWrapper.find('[data-testid="grok-client-tool-cache-toggle"]').exists()).toBe(true)
-
-    const grokAPIKeyWrapper = mountModal({
-      ...buildGrokOAuthAccount(),
-      type: 'apikey',
-      credentials: { api_key: 'xai-test', base_url: 'https://api.x.ai/v1' }
-    })
-    expect(grokAPIKeyWrapper.find('[data-testid="grok-client-tool-cache-toggle"]').exists()).toBe(false)
-
-    const openAIOAuthWrapper = mountModal({
-      ...buildGrokOAuthAccount(),
-      platform: 'openai'
-    })
-    expect(openAIOAuthWrapper.find('[data-testid="grok-client-tool-cache-toggle"]').exists()).toBe(false)
-  })
-
-  it('loads and disables client-tool caching while preserving unrelated extra fields', async () => {
-    const account = buildGrokOAuthAccount({}, {
-      grok_client_tool_cache_enabled: true,
-      custom_setting: 'keep-me'
+  it('requires removal of legacy identity overrides before saving and preserves ordinary headers', async () => {
+    const account = buildGrokOAuthAccount({
+      header_override_enabled: true,
+      header_overrides: { 'X-Stainless-Package-Version': '999.0.0', 'x-route': 'primary' }
     })
     updateAccountMock.mockResolvedValue(account)
-
     const wrapper = mountModal(account)
-    const toggle = wrapper.get('[data-testid="grok-client-tool-cache-toggle"]')
-    expect(toggle.attributes('aria-checked')).toBe('true')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await vi.waitFor(() => expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.headerOverride.blockedName'))
+    expect(updateAccountMock).not.toHaveBeenCalled()
 
-    await toggle.trigger('click')
+    wrapper.findComponent({ name: 'HeaderOverrideEditor' }).vm.$emit('update:rows', [
+      { name: 'x-route', value: 'primary' }
+    ])
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await vi.waitFor(() => expect(updateAccountMock).toHaveBeenCalledTimes(1))
-
-    const payload = updateAccountMock.mock.calls[0]?.[1]
-    expect(payload?.extra?.custom_setting).toBe('keep-me')
-    expect(payload?.extra?.grok_client_tool_cache_enabled).toBe(false)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.header_overrides).toEqual({ 'x-route': 'primary' })
   })
 
-  it('defaults client-tool caching on when the setting is missing and persists explicit true', async () => {
+  it('does not expose the retired tool-cache control on Grok OAuth or API Key', () => {
+    const oauth = mountModal(buildGrokOAuthAccount())
+    expect(oauth.find('[data-testid="grok-client-tool-cache-toggle"]').exists()).toBe(false)
+    const apiKey = mountModal({ ...buildGrokOAuthAccount(), type: 'apikey', credentials: { api_key: 'test-key' } })
+    expect(apiKey.find('[data-testid="grok-client-tool-cache-toggle"]').exists()).toBe(false)
+  })
+
+  it('saving a Grok account does not recreate the retired cache configuration', async () => {
     const account = buildGrokOAuthAccount({}, { custom_setting: 'keep-me' })
     updateAccountMock.mockResolvedValue(account)
-
     const wrapper = mountModal(account)
-    const toggle = wrapper.get('[data-testid="grok-client-tool-cache-toggle"]')
-    expect(toggle.attributes('aria-checked')).toBe('true')
-
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await vi.waitFor(() => expect(updateAccountMock).toHaveBeenCalledTimes(1))
-
     const payload = updateAccountMock.mock.calls[0]?.[1]
-    expect(payload?.extra).toMatchObject({
-      grok_client_tool_cache_enabled: true,
-      custom_setting: 'keep-me'
-    })
-  })
-
-  it('keeps an explicit false opt-out when saving an untouched account', async () => {
-    const account = buildGrokOAuthAccount(
-      {},
-      {
-        grok_client_tool_cache_enabled: false,
-        custom_setting: 'keep-me'
-      }
-    )
-    updateAccountMock.mockResolvedValue(account)
-
-    const wrapper = mountModal(account)
-    const toggle = wrapper.get('[data-testid="grok-client-tool-cache-toggle"]')
-    expect(toggle.attributes('aria-checked')).toBe('false')
-
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-    await vi.waitFor(() => expect(updateAccountMock).toHaveBeenCalledTimes(1))
-
-    const payload = updateAccountMock.mock.calls[0]?.[1]
-    expect(payload?.extra).toMatchObject({
-      grok_client_tool_cache_enabled: false,
-      custom_setting: 'keep-me'
-    })
-  })
-
-  it('shows malformed cache settings as disabled so the UI matches the fail-closed backend', () => {
-    const account = buildGrokOAuthAccount(
-      {},
-      {
-        grok_client_tool_cache_enabled: 'true',
-        custom_setting: 'keep-me'
-      }
-    )
-
-    const wrapper = mountModal(account)
-    expect(
-      wrapper.get('[data-testid="grok-client-tool-cache-toggle"]').attributes('aria-checked')
-    ).toBe('false')
+    expect(payload?.extra).toEqual({ custom_setting: 'keep-me' })
+    expect(payload?.extra).not.toHaveProperty('grok_client_tool_cache_enabled')
+    expect(account.extra).toEqual({ custom_setting: 'keep-me' })
   })
 })

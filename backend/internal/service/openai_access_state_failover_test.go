@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package service
 
 import (
@@ -77,7 +79,7 @@ func TestOpenAIUpstreamAccessStateClassification(t *testing.T) {
 			if !tt.want {
 				return
 			}
-			require.True(t, (&OpenAIGatewayService{}).shouldFailoverOpenAIUpstreamResponse(http.StatusForbidden, "", body))
+			require.True(t, (&OpenAIGatewayService{}).shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusForbidden, "", body))
 			require.True(t, shouldFailoverOpenAIPassthroughResponse(&Account{Type: AccountTypeOAuth}, http.StatusForbidden, body))
 
 			err := newOpenAIUpstreamFailoverError(http.StatusForbidden, nil, body, "", true)
@@ -105,7 +107,7 @@ func TestOpenAIHTTPAccessStateDoesNotTrustBadRequestMessage(t *testing.T) {
 
 	require.False(t, isOpenAIUpstreamAccessStateError("", body), "free-form stream messages are not durable account evidence")
 	require.False(t, isOpenAIHTTPUpstreamAccessStateError(http.StatusBadRequest, "", body))
-	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadRequest, "", body))
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadRequest, "", body))
 	require.False(t, shouldFailoverOpenAIPassthroughResponse(&Account{Type: AccountTypeOAuth}, http.StatusBadRequest, body))
 
 	err := newOpenAIUpstreamFailoverError(http.StatusBadRequest, nil, body, "", false)
@@ -148,7 +150,7 @@ func TestOpenAIHTTPAccessStateTrustsStructuredCode(t *testing.T) {
 	body := []byte(`{"error":{"code":"organization_deactivated","message":"request rejected"}}`)
 
 	require.True(t, isOpenAIHTTPUpstreamAccessStateError(http.StatusBadRequest, "", body))
-	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadRequest, "", body))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadRequest, "", body))
 	require.True(t, svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusBadRequest, nil, body))
 	require.Equal(t, 1, repo.setErrorCalls)
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
@@ -189,7 +191,7 @@ func TestOpenAIHTTPAuthMessagesUseExistingStatusPolicies(t *testing.T) {
 func TestOpenAICyberPolicyWrapped5xxNeverFailsOver(t *testing.T) {
 	body := []byte(`{"error":{"code":"cyber_policy","message":"blocked"}}`)
 	svc := &OpenAIGatewayService{}
-	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "wrapped upstream failure", body))
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadGateway, "wrapped upstream failure", body))
 	require.False(t, shouldFailoverOpenAIPassthroughResponse(&Account{Type: AccountTypeOAuth}, http.StatusBadGateway, body))
 }
 
@@ -199,6 +201,8 @@ func TestOpenAICapacityFailoverCarriesSafeTerminalResponse(t *testing.T) {
 	err := newOpenAIUpstreamFailoverError(http.StatusBadRequest, nil, body, message, false)
 
 	require.True(t, err.IsOpenAICapacityShed())
+	require.False(t, err.RetryableOnSameAccount)
+	require.False(t, err.ShouldRetryNextAccount())
 	require.Equal(t, http.StatusServiceUnavailable, err.ClientStatusCode)
 	require.Equal(t, message, err.ClientMessage)
 	require.NotContains(t, err.ClientMessage, "server_is_overloaded")
@@ -224,6 +228,18 @@ func TestOpenAIStreamSemanticStatusesPreservedAcrossTerminalShapes(t *testing.T)
 			require.Equal(t, tt.wantFailover, openAIStreamErrorEventShouldFailover(payload, message))
 		})
 	}
+}
+
+// 不少 OpenAI 兼容上游在流内错误对象里用 status 而不是 status_code 报告状态码。
+// 只认 status_code 会把它们降级成通用 502，账号健康与 failover 判定随之失效。
+// 上游把 status 报成 5xx 时仍然是通用上游故障：既不改账号状态，也不冒充认证/限流。
+func TestOpenAIStreamErrorStatusAliasKeepsGeneric5xxUnclassified(t *testing.T) {
+	payload := []byte(`{"type":"response.failed","response":{"error":{"code":"server_error","status":500,"type":"server_error","message":"rv_shape_invalid: temporary response validation failure after partial output; retry your request if your client can recover partial output."},"id":"resp_0","object":"response","status":"failed"},"sequence_number":80}`)
+	message := extractOpenAISSEErrorMessage(payload)
+
+	require.Equal(t, http.StatusBadGateway, openAIStreamFailureStatus(payload, message))
+	require.False(t, openAIStreamCredentialAuthFailure(payload))
+	require.True(t, openAIStreamFailedEventShouldFailover(payload, message))
 }
 
 func TestOpenAIStreamBareErrorUsesSemanticFailover(t *testing.T) {

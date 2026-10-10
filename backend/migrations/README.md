@@ -13,16 +13,8 @@ startup. The runner records each filename and SHA256 checksum in
 - Keep each migration focused and idempotent where practical.
 
 The repository contains historical duplicate numeric prefixes. They remain
-unchanged because filenames and checksums are already deployed. In particular,
-GotoCC's `221_add_teams.sql`, `222_harden_team_lifecycle.sql`, and
-`223_add_team_attribution_indexes_notx.sql` predate the v0.1.177 upstream
-migrations that use the same prefixes. The deployed GotoCC video-task
-migrations `238_openai_video_tasks.sql` and
-`239_openai_video_task_billing_mode.sql` likewise predate the upstream v0.2.0
-files that originally reused `238` through `244`; those upstream files start at
-`240` in the GotoCC lineage. A reviewed production-lineage migration may retain
-its deployed filename only when `tools/check_new_migrations.py` binds that exact
-path and SHA-256. Do not add new duplicates.
+unchanged because filenames and checksums are already deployed. Do not add new
+duplicates.
 
 ## File Naming
 
@@ -100,5 +92,79 @@ historical incidents and must not be used for routine development.
 - A failed regular migration rolls back its transaction.
 - A failed non-transactional migration requires operator review before retry.
 
+## Domestic identity environment
+
+Migration 276 deletes the superseded Kimi/ZCode OS, kernel and architecture
+overrides from global and account identities. They now use the pinned Ubuntu
+24.04 environment. Device name/UUID, locale, timezone and unrelated configuration
+are preserved. See [outbound identity](../../docs/OUTBOUND_IDENTITY.md).
+
+## Native client family selection
+
+Migration 278 removes retired default mappings and whole foreign identity
+candidates from native provider/cloud accounts. Compatible supplier mappings,
+correct-family candidates, global profiles/runtime declarations, credentials,
+model restrictions and billing settings remain intact. The cleanup is tested
+against isolated PostgreSQL, including repeated execution and empty settings.
+See [outbound identity](../../docs/OUTBOUND_IDENTITY.md#selection-and-persistence).
+
+## Upgrade Prerequisites
+
+Back up PostgreSQL before upgrading. Replacing the application binary alone
+cannot reverse renamed columns or data cleanup; recovery requires the matching
+pre-upgrade backup or a reviewed forward compensation. Applied migration files
+and checksums remain immutable.
+
+- **Model policies (259–262):** `models_list_config` becomes `model_allowlist`
+  in storage and management JSON. Update management clients to the new field.
+  Migration 262 trims entries, removes case-insensitive duplicates in order,
+  and disables legacy enabled empty/blank lists. It never replaces them with
+  `*`. Malformed JSON, non-string entries and non-trailing wildcard patterns
+  stop this historical migration; repair the indicated group before retrying.
+  Diagnostics contain group IDs, without model names or credentials. Current
+  runtime policies support `*` at any position; that does not change migration
+  262's one-time validation. See [model admission](../../docs/protocols/OPENAI_RESPONSES.md).
+- **Access logs (263):** an installation with pre-existing user rows preserves
+  explicit `persist_access_logs` and receives `true` only when that field is
+  missing. Fresh databases keep the application default `false`. Unrelated
+  runtime-log fields are preserved; malformed configuration needs repair.
+  This switch does not disable required security-audit exception logs.
+- **Platforms and quotas (261, 266, 267, 273, 277):** platform constraints retain the
+  full Plus platform set, including MiniMax, OpenCode and TypeSafe. Migration
+  267 removes quota rows whose daily, weekly and monthly limits are all NULL;
+  those rows are unlimited. Migration 273 expands both quota and composite
+  target constraints without removing existing platforms. Migration 277 adds
+  StepFun to those constraints and the legacy probe-provider constraints.
+- **Usage and payments (269, 270, 274):** rollout budget units remain a reserved
+  usage dimension; affiliate `operation_id` supports idempotent ledger writes.
+  Historical payment orders receive `bonus_amount=0`. See [payment behavior](../../docs/PAYMENT.md).
+- **Authentication caches:** password-reset links stored in the previous
+  plaintext form are rejected; users request new links. Verification codes
+  carry forward legacy attempt counters: four attempts permit at most one
+  more comparison; five or more permit none. See [authentication](../../docs/AUTHENTICATION.md).
+
+For explicit upstream URL allowlists, add `api.minimax.io` for the international
+MiniMax site (`api.minimaxi.com` for China); new defaults do not merge into
+existing explicit lists. The system-log cleanup fallback
+`ops.cleanup.system_log_retention_days` is 30 and must be positive when cleanup
+is enabled; runtime ops settings can override it. See the maintained
+[deployment configuration](../../deploy/config.example.yaml).
+
 Runner implementation:
 `backend/internal/repository/migrations_runner.go`.
+
+## Local security audit error attribution
+
+Migration 279 corrects reliably identifiable historical local 403 refusals to
+request/client attribution with their exact policy or prompt-guard code.
+Malformed, ambiguous and provider records remain unchanged. It preserves
+bodies, timestamps, business-limit flags and unknown timing and is safe to repeat.
+The runtime uses trusted decisions for new records. See
+[error diagnostics](../../docs/ERROR_REQUEST_DIAGNOSTICS.md).
+
+## Retired Grok cache control
+
+Migration 280 removes `grok_client_tool_cache_enabled` only from Grok account
+extra objects. Credentials, unrelated extras, foreign-platform rows and
+non-object historical values are preserved. The retired switch no longer grants
+hosted search tools or changes cache routing. See [Grok](../../docs/providers/GROK.md#cache-and-tool-declarations).

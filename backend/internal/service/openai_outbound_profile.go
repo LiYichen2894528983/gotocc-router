@@ -7,6 +7,8 @@ import (
 
 	infraerrors "github.com/LuckyKuang/sub2api-plus/internal/pkg/errors"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/openai"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
+	"github.com/gin-gonic/gin"
 )
 
 const maxOpenAIAccountUserAgentLength = 512
@@ -40,6 +42,24 @@ type openAIOutboundIdentity struct {
 // request-classification switch, not an administrator override for an account's
 // configured outbound client identity.
 func resolveOpenAIOutboundIdentityFromSettings(ctx context.Context, account *Account, settingService *SettingService) openAIOutboundIdentity {
+	if scope := outboundIdentityScopeFromContext(ctx); scope != nil {
+		key := outboundIdentityOwnerKey(account)
+		if cached, ok := scope.codex.Load(key); ok {
+			if identity, valid := cached.(openAIOutboundIdentity); valid {
+				return identity
+			}
+		}
+		identity := resolveOpenAIOutboundIdentityFromCurrentSettings(ctx, account, settingService)
+		cached, _ := scope.codex.LoadOrStore(key, identity)
+		if snapshot, valid := cached.(openAIOutboundIdentity); valid {
+			return snapshot
+		}
+		return identity
+	}
+	return resolveOpenAIOutboundIdentityFromCurrentSettings(ctx, account, settingService)
+}
+
+func resolveOpenAIOutboundIdentityFromCurrentSettings(ctx context.Context, account *Account, settingService *SettingService) openAIOutboundIdentity {
 	accountUA := ""
 	if account != nil {
 		accountUA = account.GetOpenAIUserAgent()
@@ -186,7 +206,11 @@ func resolveOpenAIOutboundIdentityWithVersionAndCompatibility(accountUA, systemU
 }
 
 func validOpenAIOutboundIdentityWithCompatibility(userAgent string, allowLegacyCompatibility bool) (openAIOutboundIdentity, bool) {
-	profile, pairedUA, ok := openai.PairConfiguredCodexClientIdentity(strings.TrimSpace(userAgent), allowLegacyCompatibility)
+	userAgent = strings.TrimSpace(userAgent)
+	if len(userAgent) > maxOpenAIAccountUserAgentLength {
+		return openAIOutboundIdentity{}, false
+	}
+	profile, pairedUA, ok := openai.PairConfiguredCodexClientIdentity(userAgent, allowLegacyCompatibility)
 	if !ok {
 		return openAIOutboundIdentity{}, false
 	}
@@ -218,6 +242,11 @@ func openAIOutboundIdentityVersion(userAgent string) string {
 func (s *OpenAIGatewayService) applyOpenAIOutboundIdentity(ctx context.Context, account *Account, headers http.Header, useCodexIdentity bool) openAIOutboundIdentity {
 	identity := s.resolveOpenAIOutboundIdentity(ctx, account)
 	applyResolvedOpenAIOutboundIdentity(headers, identity, useCodexIdentity)
+	var settings *SettingService
+	if s != nil {
+		settings = s.settingService
+	}
+	applyOpenAICodexResidencyFromSettings(ctx, settings, headers, useCodexIdentity)
 	return identity
 }
 
@@ -225,18 +254,28 @@ func applyResolvedOpenAIOutboundIdentity(headers http.Header, identity openAIOut
 	if headers == nil {
 		return
 	}
-	headers.Set("User-Agent", identity.UserAgent)
-	// Keep the Codex protocol version aligned when an endpoint uses it. OAuth
-	// endpoints always require it; API-key endpoints retain Version only when an
-	// earlier endpoint-specific stage supplied it.
-	if useCodexIdentity || headers.Get("Version") != "" {
-		headers.Set("Version", identity.Version)
+	for name := range headers {
+		if outboundidentity.IsIdentityHeader(name) {
+			delete(headers, name)
+		}
 	}
-	if !useCodexIdentity {
-		headers.Del("Originator")
+	headers.Set("User-Agent", identity.UserAgent)
+	// The endpoint protocol owns header presence. Neither inbound headers nor
+	// generic overrides can opt a Platform API request into Codex declarations.
+	if useCodexIdentity {
+		headers.Set("Version", identity.Version)
+		headers.Set("Originator", identity.Originator)
+	}
+}
+
+func preserveOpenAIThreadOriginator(c *gin.Context, headers http.Header) {
+	if c == nil || c.Request == nil || headers == nil {
 		return
 	}
-	headers.Set("Originator", identity.Originator)
+	inbound := strings.TrimSpace(c.GetHeader("originator"))
+	if openai.IsOfficialCodexThreadOriginator(inbound) {
+		headers.Set("Originator", inbound)
+	}
 }
 
 // applyOpenAIHeaderOverrides applies only the non-identity account overrides
@@ -261,7 +300,7 @@ func (a *Account) applyOpenAIHeaderOverrides(headers http.Header) {
 
 func isOpenAIProtectedHeaderOverrideName(lowerName string) bool {
 	lowerName = strings.ToLower(strings.TrimSpace(lowerName))
-	if lowerName == "user-agent" || lowerName == "originator" || lowerName == "version" || lowerName == "openai-beta" {
+	if lowerName == "user-agent" || lowerName == "originator" || lowerName == "version" || lowerName == "openai-beta" || lowerName == "x-openai-internal-codex-residency" {
 		return true
 	}
 	if strings.HasPrefix(lowerName, "x-codex-") {

@@ -247,6 +247,31 @@ func TestSettingServiceUsesAtomicClientDisconnectGenerationWriter(t *testing.T) 
 	require.Equal(t, "false", repo.updates[SettingKeyClientDisconnectConsecutiveBanEnabled])
 }
 
+func TestSettingServiceClientDisconnectRiskDefaultsDisabled(t *testing.T) {
+	for name, value := range map[string]string{
+		"missing": "",
+		"invalid": "enabled",
+		"false":   "false",
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := map[string]string{}
+			if name != "missing" {
+				values[SettingKeyClientDisconnectConsecutiveBanEnabled] = value
+			}
+			settings, err := NewSettingService(&settingGetAllRepoStub{values: values}, &config.Config{}).
+				GetAllSettings(context.Background())
+			require.NoError(t, err)
+			require.False(t, settings.ClientDisconnectConsecutiveBanEnabled)
+		})
+	}
+
+	settings, err := NewSettingService(&settingGetAllRepoStub{values: map[string]string{
+		SettingKeyClientDisconnectConsecutiveBanEnabled: " true ",
+	}}, &config.Config{}).GetAllSettings(context.Background())
+	require.NoError(t, err)
+	require.True(t, settings.ClientDisconnectConsecutiveBanEnabled)
+}
+
 func TestSettingService_AsyncImageUserLimitSurvivesAdminRoundTrip(t *testing.T) {
 	readService := NewSettingService(&settingGetAllRepoStub{values: map[string]string{
 		SettingKeyAsyncImageUserImagesPerMinute: "37",
@@ -568,13 +593,6 @@ func TestSettingService_UpdateSettings_OpenAIAdvancedSchedulerWeightSums(t *test
 			require.NoError(t, err)
 		})
 	}
-}
-
-func TestSettingService_ParseSettingsDefaultsOpenAIOAuthSchedulingRateMultiplier(t *testing.T) {
-	svc := NewSettingService(&settingUpdateRepoStub{}, &config.Config{})
-
-	require.Equal(t, 1.0, svc.parseSettings(map[string]string{}).OpenAIOAuthSchedulingRateMultiplier)
-	require.Equal(t, 0.05, svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.05"}).OpenAIOAuthSchedulingRateMultiplier)
 }
 
 func TestSettingService_ParseSettingsGrokCrossClientModelMapRequiresExplicitTrue(t *testing.T) {
@@ -1013,4 +1031,11 @@ func TestSettingService_StalePasskeyTrueWithoutConfigReportsDisabled(t *testing.
 	settings, err := service.GetAllSettings(context.Background())
 	require.NoError(t, err)
 	require.False(t, settings.PasskeyEnabled)
+}
+
+func TestSettingService_ParseSettingsDefaultsOpenAIOAuthSchedulingRateMultiplier(t *testing.T) {
+	svc := NewSettingService(&settingUpdateRepoStub{}, &config.Config{})
+
+	require.Equal(t, 1.0, svc.parseSettings(map[string]string{}).OpenAIOAuthSchedulingRateMultiplier)
+	require.Equal(t, 0.05, svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.05"}).OpenAIOAuthSchedulingRateMultiplier)
 }

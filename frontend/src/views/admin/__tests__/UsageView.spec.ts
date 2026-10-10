@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
@@ -529,6 +533,9 @@ describe('admin UsageView request ID column visibility', () => {
         expect.objectContaining({ key: 'session_id', label: 'Session ID' }),
       ]),
     )
+    expect(usageTable.props('columns')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'upstream_request_id' })]),
+    )
   })
 })
 
@@ -774,7 +781,7 @@ describe('admin UsageView Excel export latency fields', () => {
           created_at: '2026-08-01T00:00:00Z',
           model: 'gpt-text',
           input_tokens: 1,
-          output_tokens: 2,
+          output_tokens: 20,
           cache_read_tokens: 0,
           cache_creation_tokens: 0,
           input_cost: 0,
@@ -788,8 +795,12 @@ describe('admin UsageView Excel export latency fields', () => {
           upstream_model: 'gpt-text-upstream',
           upstream_response_model: 'gpt-text-response',
           upstream_model_mismatch: true,
+          timing_version: 1,
+          request_type: 'stream',
+          stream: true,
+          is_complete: false,
           first_token_ms: 120,
-          last_token_ms: 300,
+          last_token_ms: 1120,
           first_output_ms: 100,
           first_output_kind: 'text',
           duration_ms: 345,
@@ -857,10 +868,12 @@ describe('admin UsageView Excel export latency fields', () => {
     const headers = aoaToSheet.mock.calls[0][0][0] as string[]
     const rows = sheetAddAoa.mock.calls[0][1] as unknown[][]
     const requestedModelIndex = headers.indexOf('Requested model')
-    const firstTokenIndex = headers.indexOf('usage.firstTokenOrLegacyEvent')
+    const firstTokenIndex = headers.indexOf('usage.latencyFirstToken')
     const firstOutputIndex = headers.indexOf('usage.latencyFirstOutput')
     const firstOutputKindIndex = headers.indexOf('usage.latencyFirstOutputKind')
     const durationIndex = headers.indexOf('usage.duration')
+    const tpsIndex = headers.indexOf('usage.averageTps')
+    const unavailableReasonIndex = headers.indexOf('usage.averageTpsNote')
     const sessionIDIndex = headers.indexOf('Session ID')
 
     expect(headers.slice(requestedModelIndex, requestedModelIndex + 4)).toEqual([
@@ -879,14 +892,70 @@ describe('admin UsageView Excel export latency fields', () => {
     expect(firstOutputIndex).toBe(firstTokenIndex + 1)
     expect(firstOutputKindIndex).toBe(firstOutputIndex + 1)
     expect(durationIndex).toBe(firstOutputKindIndex + 1)
+    expect(tpsIndex).toBe(durationIndex + 1)
+    expect(unavailableReasonIndex).toBe(tpsIndex + 1)
     expect(rows).toHaveLength(2)
-    expect(rows[0].slice(firstTokenIndex, durationIndex + 1)).toEqual([120, 100, 'text', 345])
-    expect(rows[1].slice(firstTokenIndex, durationIndex + 1)).toEqual(['', 220, 'image', 500])
+    expect(rows[0].slice(firstTokenIndex, unavailableReasonIndex + 1)).toEqual([120, 100, 'text', 345, 57.971014492753625, 'usage.averageTpsIncomplete'])
+    expect(rows[1].slice(firstTokenIndex, unavailableReasonIndex + 1)).toEqual(['', 220, 'image', 500, '', 'usage.timingUnavailableNoTextTokens'])
     expect(sessionIDIndex).toBeGreaterThan(-1)
     expect(rows[0][sessionIDIndex]).toBe('=audit-session-001')
     expect(rows[1][sessionIDIndex]).toBe('')
     expect(saveAs).toHaveBeenCalledOnce()
 
     wrapper.unmount()
+  })
+})
+
+// xlsx@0.20.3 由 frontend/third-party/xlsx-0.20.3.tgz 提供(Apache-2.0,
+// dependencies: {},见 SECURITY.md《Dependency Audit Exceptions》)。
+// 该版本已修复 CVE-2023-30533 / CVE-2024-22363,因此不再需要任何审计例外。
+// 本测试守护两条不变量:仓库源码只用 writer API、package.json 不再 pin 例外。
+// 改动任一侧都需重新评估该依赖。
+describe('UsageView xlsx audit exception', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  // spec lives at <frontend>/src/views/admin/__tests__/
+  const frontendRoot = resolve(here, '../../../..')
+  const srcRoot = resolve(frontendRoot, 'src')
+  const packageJsonPath = resolve(frontendRoot, 'package.json')
+  // 守卫文件自身不参与扫描:否则它会命中自己的正则字面量。
+  const guardFile = resolve(here, 'UsageView.spec.ts')
+
+  // 6.1(a) 只允许 writer API。解析入口:模块导出的 read/readFile* 以及
+  // utils.sheet_to_*;动态 import('xlsx') 是导出路径,必须保留,故不在其中。
+  const XLSX_SPECIFIER = /['"]xlsx['"]/
+  const XLSX_PARSE_PATTERNS = [
+    /XLSX\s*\.\s*read[A-Za-z]*\s*\(/,
+    /\breadFile[A-Za-z]*\s*\(/,
+    /\bsheet_to_[A-Za-z0-9_]+\s*\(/,
+  ]
+
+  const collectSourceFiles = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const fullPath = resolve(dir, entry.name)
+      if (entry.isDirectory()) {
+        return entry.name === '__tests__' ? [] : collectSourceFiles(fullPath)
+      }
+      if (!entry.isFile() || !/\.(ts|vue)$/.test(entry.name)) return []
+      return fullPath === guardFile ? [] : [fullPath]
+    })
+
+  it('parses no spreadsheet input anywhere under frontend/src', () => {
+    const offenders: string[] = []
+    for (const file of collectSourceFiles(srcRoot)) {
+      const source = readFileSync(file, 'utf8')
+      if (!XLSX_SPECIFIER.test(source)) continue
+      for (const pattern of XLSX_PARSE_PATTERNS) {
+        if (pattern.test(source)) {
+          offenders.push(`${relative(frontendRoot, file)}: ${pattern.source}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('pins no audit exceptions in frontend/package.json', () => {
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+    expect(pkg.pnpm?.auditConfig?.ignoreCves ?? []).toEqual([])
+    expect(pkg.dependencies.xlsx).toBe('file:third-party/xlsx-0.20.3.tgz')
   })
 })

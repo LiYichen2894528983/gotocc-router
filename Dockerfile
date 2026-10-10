@@ -29,6 +29,9 @@ ENV NODE_OPTIONS=--max-old-space-size=3072
 # Install pnpm (pinned to v9 to match CI and keep builds reproducible)
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
+# Vendored third-party archives required by the `file:` dependency below.
+# Must be copied before the install layer, otherwise `xlsx` cannot resolve.
+COPY frontend/third-party/ ./third-party/
 # Install dependencies first (better caching)
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/store \
@@ -42,6 +45,8 @@ RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/stor
 # Copy only that subtree to keep the build dependency minimal.
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/
+COPY client-access-defaults.json affiliate-defaults.json /app/
+COPY backend/internal/pkg/cnmodels/models.json /app/backend/internal/pkg/cnmodels/models.json
 RUN pnpm run build
 
 # -----------------------------------------------------------------------------
@@ -54,7 +59,7 @@ RUN pnpm run build
 FROM --platform=${BUILDPLATFORM} ${GOLANG_IMAGE} AS backend-builder
 
 # Build arguments for version info (set by CI)
-ARG VERSION=0.2.0+custom.004
+ARG VERSION=0.2.14+custom.003
 ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY
@@ -108,7 +113,7 @@ FROM ${POSTGRES_IMAGE} AS pg-client
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
-ARG VERSION=0.2.0+custom.004
+ARG VERSION=0.2.14+custom.003
 
 # Labels
 LABEL maintainer="LuckyKuang <https://github.com/luckykuang>"

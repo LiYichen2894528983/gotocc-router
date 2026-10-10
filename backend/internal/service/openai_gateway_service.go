@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/LuckyKuang/sub2api-plus/internal/config"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/accountbalance"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/ip"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/logger"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/openai"
@@ -61,7 +62,7 @@ const (
 	// 陈旧版本会被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
 	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
 	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
-	codexCLIVersion = "0.147.0"
+	codexCLIVersion = "0.158.0"
 	// openAICodexProbeVersion is kept as an explicit alias for probe callers
 	// and version-consistency tests; both declarations must remain identical.
 	openAICodexProbeVersion = codexCLIVersion
@@ -74,46 +75,55 @@ const (
 )
 
 // OpenAI allowed headers whitelist (for non-passthrough).
+// 出站身份头（user-agent/originator/version）由受信任身份解析生成，不在此放行，
+// 避免入站字段选源覆盖身份合同，见 docs/OUTBOUND_IDENTITY.md。
 var openaiAllowedHeaders = map[string]bool{
-	"accept-language":          true,
-	"content-type":             true,
-	"conversation_id":          true,
-	"session-id":               true,
-	"session_id":               true,
-	"thread-id":                true,
-	"x-client-request-id":      true,
-	"x-codex-beta-features":    true,
-	"x-codex-installation-id":  true,
-	"x-codex-parent-thread-id": true,
-	"x-codex-routing-hint":     true,
-	"x-codex-turn-state":       true,
-	"x-codex-turn-metadata":    true,
-	"x-codex-window-id":        true,
-	responsesLiteHeaderKey:     true,
+	"accept-language":                       true,
+	"content-type":                          true,
+	"conversation_id":                       true,
+	"openai-beta":                           true,
+	"session-id":                            true,
+	"session_id":                            true,
+	"thread-id":                             true,
+	"x-client-request-id":                   true,
+	"x-codex-beta-features":                 true,
+	"x-codex-installation-id":               true,
+	"x-codex-parent-thread-id":              true,
+	"x-codex-routing-hint":                  true,
+	"x-codex-turn-state":                    true,
+	"x-codex-turn-metadata":                 true,
+	"x-codex-window-id":                     true,
+	"x-openai-memgen-request":               true,
+	"x-openai-subagent":                     true,
+	"x-responsesapi-include-timing-metrics": true,
+	responsesLiteHeaderKey:                  true,
 }
 
 // OpenAI passthrough allowed headers whitelist.
 // 透传模式下仅放行这些低风险请求头，避免将非标准/环境噪声头传给上游触发风控。
 var openaiPassthroughAllowedHeaders = map[string]bool{
-	"accept":                   true,
-	"accept-language":          true,
-	"content-type":             true,
-	"conversation_id":          true,
-	"openai-beta":              true,
-	"user-agent":               true,
-	"originator":               true,
-	"session-id":               true,
-	"session_id":               true,
-	"thread-id":                true,
-	"x-client-request-id":      true,
-	"x-codex-beta-features":    true,
-	"x-codex-installation-id":  true,
-	"x-codex-parent-thread-id": true,
-	"x-codex-routing-hint":     true,
-	"x-codex-turn-state":       true,
-	"x-codex-turn-metadata":    true,
-	"x-codex-window-id":        true,
-	responsesLiteHeaderKey:     true,
+	"accept":                                true,
+	"accept-language":                       true,
+	"content-type":                          true,
+	"conversation_id":                       true,
+	"openai-beta":                           true,
+	"user-agent":                            true,
+	"originator":                            true,
+	"session-id":                            true,
+	"session_id":                            true,
+	"thread-id":                             true,
+	"x-client-request-id":                   true,
+	"x-codex-beta-features":                 true,
+	"x-codex-installation-id":               true,
+	"x-codex-parent-thread-id":              true,
+	"x-codex-routing-hint":                  true,
+	"x-codex-turn-state":                    true,
+	"x-codex-turn-metadata":                 true,
+	"x-codex-window-id":                     true,
+	"x-openai-memgen-request":               true,
+	"x-openai-subagent":                     true,
+	"x-responsesapi-include-timing-metrics": true,
+	responsesLiteHeaderKey:                  true,
 }
 
 // codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
@@ -136,12 +146,66 @@ var codexCLIOnlyDebugHeaderWhitelist = []string{
 type OpenAICodexUsageSnapshot struct {
 	PrimaryUsedPercent          *float64 `json:"primary_used_percent,omitempty"`
 	PrimaryResetAfterSeconds    *int     `json:"primary_reset_after_seconds,omitempty"`
+	PrimaryResetAtUnix          *int64   `json:"primary_reset_at_unix,omitempty"`
 	PrimaryWindowMinutes        *int     `json:"primary_window_minutes,omitempty"`
 	SecondaryUsedPercent        *float64 `json:"secondary_used_percent,omitempty"`
 	SecondaryResetAfterSeconds  *int     `json:"secondary_reset_after_seconds,omitempty"`
+	SecondaryResetAtUnix        *int64   `json:"secondary_reset_at_unix,omitempty"`
 	SecondaryWindowMinutes      *int     `json:"secondary_window_minutes,omitempty"`
 	PrimaryOverSecondaryPercent *float64 `json:"primary_over_secondary_percent,omitempty"`
-	UpdatedAt                   string   `json:"updated_at,omitempty"`
+	// LimitName is the server-declared name of the default `codex` limit family
+	// (`x-codex-limit-name`), typically the metered model slug.
+	LimitName string `json:"limit_name,omitempty"`
+	// Credits snapshot from the x-codex-credits-* header family. The WHAM API
+	// pull path remains the authoritative source; these headers are a realtime
+	// supplement observed on ordinary responses.
+	CreditsHasCredits *bool  `json:"credits_has_credits,omitempty"`
+	CreditsUnlimited  *bool  `json:"credits_unlimited,omitempty"`
+	CreditsBalance    string `json:"credits_balance,omitempty"`
+	// Families carries rate-limit families beyond the default `codex` family,
+	// discovered by scanning the `x-{limit}-primary-used-percent` prefix the
+	// way the official client does (e.g. `x-codex-secondary-primary-*` belongs
+	// to the `codex_secondary` family, not the default 5h window).
+	Families  []OpenAICodexRateLimitFamily `json:"families,omitempty"`
+	UpdatedAt string                       `json:"updated_at,omitempty"`
+}
+
+// OpenAICodexRateLimitFamily is one non-default metered limit family parsed
+// from the `x-{limit}-*` response headers.
+type OpenAICodexRateLimitFamily struct {
+	LimitID                string   `json:"limit_id,omitempty"`
+	LimitName              string   `json:"limit_name,omitempty"`
+	PrimaryUsedPercent     *float64 `json:"primary_used_percent,omitempty"`
+	PrimaryWindowMinutes   *int     `json:"primary_window_minutes,omitempty"`
+	PrimaryResetAtUnix     *int64   `json:"primary_reset_at_unix,omitempty"`
+	SecondaryUsedPercent   *float64 `json:"secondary_used_percent,omitempty"`
+	SecondaryWindowMinutes *int     `json:"secondary_window_minutes,omitempty"`
+	SecondaryResetAtUnix   *int64   `json:"secondary_reset_at_unix,omitempty"`
+}
+
+const openAIWeeklyQuotaWindowMinutes = 7 * 24 * 60
+
+func isOpenAIWeeklyQuotaWindowMinutes(minutes int64) bool {
+	// Only the explicit 7-day window can drive weekly group resets.
+	return minutes == openAIWeeklyQuotaWindowMinutes
+}
+
+func (s *OpenAICodexUsageSnapshot) WeeklyResetAt() (time.Time, bool) {
+	if s == nil {
+		return time.Time{}, false
+	}
+	if s.PrimaryWindowMinutes != nil && isOpenAIWeeklyQuotaWindowMinutes(int64(*s.PrimaryWindowMinutes)) && s.PrimaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.PrimaryResetAtUnix) {
+		return time.Unix(*s.PrimaryResetAtUnix, 0).UTC(), true
+	}
+	if s.SecondaryWindowMinutes != nil && isOpenAIWeeklyQuotaWindowMinutes(int64(*s.SecondaryWindowMinutes)) && s.SecondaryResetAtUnix != nil && validOpenAIQuotaResetUnix(*s.SecondaryResetAtUnix) {
+		return time.Unix(*s.SecondaryResetAtUnix, 0).UTC(), true
+	}
+	return time.Time{}, false
+}
+
+func validOpenAIQuotaResetUnix(value int64) bool {
+	// Keep raw upstream timestamps within the JSON/RFC3339 calendar range.
+	return value > 0 && value <= 253402300799
 }
 
 // NormalizedCodexLimits contains normalized 5h/7d rate limit data
@@ -234,19 +298,27 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 type OpenAIUsage struct {
 	InputTokens              int `json:"input_tokens"`
 	ImageInputTokens         int `json:"image_input_tokens,omitempty"`
+	ImageCacheReadTokens     int `json:"image_cache_read_tokens,omitempty"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
 	AudioOutputTokens        int `json:"audio_output_tokens,omitempty"`
+	// CodexRolloutBudgetUnits carries the official `codex_rollout_budget_units`
+	// declaration from the response.completed usage payload (JSON number,
+	// fractional allowed). Parsed and recorded as a reserved billing dimension;
+	// nil means the upstream did not report it.
+	CodexRolloutBudgetUnits *float64 `json:"codex_rollout_budget_units,omitempty"`
 }
 
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
 	RequestID  string
 	ResponseID string
-	Usage      OpenAIUsage
-	Model      string // 原始模型（用于响应和日志显示）
+	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
+	UpstreamHeaders http.Header
+	Usage           OpenAIUsage
+	Model           string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -280,16 +352,22 @@ type OpenAIForwardResult struct {
 	OpenAIWSMode             bool
 	// UpstreamTerminalEvent is the normalized terminal event observed on an
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
-	UpstreamTerminalEvent       string
+	UpstreamTerminalEvent string
+	ResponseHeaders       http.Header
+	// ResponseHeadersFromHandshake marks WebSocket connection-time leftovers.
+	// Those headers may refresh the account usage cache but must not drive
+	// group follow-reset as a later inference session.
+	ResponseHeadersFromHandshake bool
+	Duration                     time.Duration
+	FirstTokenMs                 *int
+	LastTokenMs                  *int
+	FirstOutputMs                *int
+	FirstOutputKind              string
+	ClientDisconnect             bool
+	// UsageIncomplete excludes synthesized completion after truncated/error upstream streams from TPS.
+	UsageIncomplete             bool
 	ResponseBody                []byte
 	StatusCode                  int
-	ResponseHeaders             http.Header
-	Duration                    time.Duration
-	FirstTokenMs                *int
-	LastTokenMs                 *int
-	FirstOutputMs               *int
-	FirstOutputKind             string
-	ClientDisconnect            bool
 	ClientDisconnectUsageSource string
 	ImageCount                  int
 	ImageSize                   string
@@ -334,13 +412,28 @@ func (r *OpenAIForwardResult) SucceededForScheduling() bool {
 // metrics. Billing may still record partial usage after an interrupted stream,
 // but those records must never drive TPS.
 func (r *OpenAIForwardResult) UsageComplete() bool {
-	if r == nil || r.ClientDisconnect {
+	if r == nil || r.ClientDisconnect || r.UsageIncomplete {
 		return false
 	}
 	if !r.Stream || !r.OpenAIWSMode {
 		return true
 	}
 	return r.SucceededForScheduling()
+}
+
+const openAIResponsesUpstreamEndpoint = "/v1/responses"
+
+// stampOpenAIResponsesUpstreamEndpoint records that this attempt hit the
+// Responses API. OpenCode Go / CN accounts cannot derive that from inbound
+// path (DeriveUpstreamEndpoint falls back to the client URL).
+func stampOpenAIResponsesUpstreamEndpoint(c *gin.Context, result *OpenAIForwardResult) {
+	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
+	if result == nil {
+		return
+	}
+	if strings.TrimSpace(result.UpstreamEndpoint) == "" {
+		result.UpstreamEndpoint = openAIResponsesUpstreamEndpoint
+	}
 }
 
 // SetActualOpenAIUpstreamEndpoint records the endpoint selected by the current
@@ -469,6 +562,7 @@ type OpenAIGatewayService struct {
 	billingCacheService    *BillingCacheService
 	userGroupRateResolver  *userGroupRateResolver
 	httpUpstream           HTTPUpstream
+	cnOAuthService         *CNOAuthService
 	pluginManager          *PluginManager
 	deferredService        *DeferredService
 	openAITokenProvider    *OpenAITokenProvider
@@ -488,6 +582,8 @@ type OpenAIGatewayService struct {
 	liveAttestationCipher  SecretEncryptor
 
 	openaiWSPoolOnce               sync.Once
+	openaiWSResourcesMu            sync.Mutex
+	openaiWSResourcesClosed        bool
 	openaiWSStateStoreOnce         sync.Once
 	openaiSchedulerOnce            sync.Once
 	openaiProxyStreamCircuitOnce   sync.Once
@@ -497,6 +593,7 @@ type OpenAIGatewayService struct {
 	openaiWSPool                   *openAIWSConnPool
 	openaiWSStateStore             OpenAIWSStateStore
 	openaiScheduler                OpenAIAccountScheduler
+	openaiAccountRotation          accountbalance.Rotation
 	openaiWSPassthroughDialer      openAIWSClientDialer
 	openaiWSSessionPreemptions     openAIWSSessionPreemptRegistry
 	openaiAccountStats             *openAIAccountRuntimeStats
@@ -516,7 +613,7 @@ type OpenAIGatewayService struct {
 	openaiWSRetryMetrics                openAIWSRetryMetrics
 	responseHeaderFilter                *responseheaders.CompiledHeaderFilter
 	codexSnapshotThrottle               *accountWriteThrottle
-	codexModelsManifestCache            codexModelsManifestCache
+	openAIModelsCache                   openAIModelsCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
@@ -726,8 +823,15 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 // CloseOpenAIWSPool 关闭 OpenAI WebSocket 连接池的后台 worker 和空闲连接。
 // 应在应用优雅关闭时调用。
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
-	if s != nil && s.openaiWSPool != nil {
-		s.openaiWSPool.Close()
+	if s == nil {
+		return
+	}
+	s.openaiWSResourcesMu.Lock()
+	s.openaiWSResourcesClosed = true
+	pool := s.openaiWSPool
+	s.openaiWSResourcesMu.Unlock()
+	if pool != nil {
+		pool.Close()
 	}
 }
 
@@ -743,7 +847,7 @@ func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {
 	}
 	wsCfg := s.cfg.Gateway.OpenAIWS
 	logOpenAIWSModeInfo(
-		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d prewarm_cooldown_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
+		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
 		wsCfg.Enabled,
 		wsCfg.OAuthEnabled,
 		wsCfg.APIKeyEnabled,
@@ -753,7 +857,6 @@ func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {
 		wsCfg.PayloadLogSampleRate,
 		wsCfg.EventFlushBatchSize,
 		wsCfg.EventFlushIntervalMS,
-		wsCfg.PrewarmCooldownMS,
 		wsCfg.RetryBackoffInitialMS,
 		wsCfg.RetryBackoffMaxMS,
 		wsCfg.RetryJitterRatio,
@@ -940,7 +1043,10 @@ func (s *OpenAIGatewayService) writeOpenAIWSFallbackErrorResponse(c *gin.Context
 
 	setOpsUpstreamError(c, statusCode, upstreamMessage, "")
 	if account != nil {
+		proxyID, proxyName := opsUpstreamWSProxyAttribution(account)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            proxyID,
+			ProxyName:          proxyName,
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -1239,6 +1345,9 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 			return "", "", err
 		}
 		account = credAccount
+	}
+	if account.IsDomesticOAuth() {
+		return account.GetCredential("access_token"), "oauth", nil
 	}
 	switch account.Type {
 	case AccountTypeOAuth:

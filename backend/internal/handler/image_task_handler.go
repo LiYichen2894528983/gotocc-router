@@ -24,7 +24,6 @@ import (
 	pkghttputil "github.com/LuckyKuang/sub2api-plus/internal/pkg/httputil"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/ip"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/logger"
-	"github.com/LuckyKuang/sub2api-plus/internal/pkg/response"
 	middleware2 "github.com/LuckyKuang/sub2api-plus/internal/server/middleware"
 	"github.com/LuckyKuang/sub2api-plus/internal/service"
 	"github.com/gin-gonic/gin"
@@ -33,12 +32,11 @@ import (
 )
 
 const (
-	asyncImageEditMaxInputImages    = 4
 	asyncImageEditMaxMultipartBytes = int64(40 << 20) // 40 MiB across images and mask
 )
 
 var (
-	errAsyncImageEditTooManyInputImages = errors.New("async image edits support at most 4 input images")
+	errAsyncImageEditTooManyInputImages = errors.New("async image edits exceed the input image limit")
 	errAsyncImageEditTooManyMasks       = errors.New("async image edits support at most one mask image")
 	errAsyncImageEditMultipartTooLarge  = errors.New("async image edit uploads exceed the allowed total size of 40 MiB")
 	errAsyncImageEditInvalidImage       = errors.New("async image edits require PNG, JPEG, or WebP image files")
@@ -148,7 +146,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", "streaming image requests cannot be submitted as asynchronous tasks")
 		return
 	}
-	if err := validateAsyncImageEditUploadLimits(c.Request.URL.Path, c.GetHeader("Content-Type"), body); err != nil {
+	if err := validateAsyncImageEditUploadLimits(c.Request.URL.Path, c.GetHeader("Content-Type"), body, h.openAI.cfg.AsyncImage.EditMaxInputImages); err != nil {
 		status := http.StatusBadRequest
 		var uploadTooLarge *service.OpenAIImageUploadTooLargeError
 		if errors.Is(err, errAsyncImageEditMultipartTooLarge) || errors.As(err, &uploadTooLarge) {
@@ -289,46 +287,6 @@ func (h *AsyncImageHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, tasks)
 }
 
-// AdminSupportList reads durable task history by the validated support target
-// ID. It never loads a target API key or touches Redis execution state.
-func (h *AsyncImageHandler) AdminSupportList(c *gin.Context) {
-	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
-	if err != nil || userID <= 0 {
-		response.BadRequest(c, "Invalid user ID")
-		return
-	}
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	offset, _ := strconv.Atoi(c.Query("offset"))
-	tasks, err := h.tasks.ListByUser(c.Request.Context(), userID, service.ImageTaskHistoryFilter{
-		Status: c.Query("status"),
-		Limit:  limit,
-		Offset: offset,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	c.Header("Cache-Control", "no-store")
-	response.Success(c, tasks)
-}
-
-// AdminSupportGet returns one durable task for the validated target account.
-// No download, retry, deletion, or status-repair route is registered beside it.
-func (h *AsyncImageHandler) AdminSupportGet(c *gin.Context) {
-	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
-	if err != nil || userID <= 0 {
-		response.BadRequest(c, "Invalid user ID")
-		return
-	}
-	task, err := h.tasks.GetByUser(c.Request.Context(), userID, c.Param("task_id"))
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	c.Header("Cache-Control", "no-store")
-	response.Success(c, task)
-}
-
 // Delete removes only a failed task owned by the authenticated user and API
 // key. It remains available after image submission is disabled, like List and
 // Get, so existing history can still be managed.
@@ -458,7 +416,7 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 // validateAsyncImageEditUploadLimits keeps detached multipart edit requests
 // within a bounded memory envelope. The same body is held by the submit
 // request, copied into the background context, and parsed before forwarding.
-func validateAsyncImageEditUploadLimits(path, contentType string, body []byte) error {
+func validateAsyncImageEditUploadLimits(path, contentType string, body []byte, maxInputImages int) error {
 	if !strings.Contains(path, "/images/edits/") || !isMultipartImagesContentType(contentType) {
 		return nil
 	}
@@ -506,8 +464,8 @@ func validateAsyncImageEditUploadLimits(path, contentType string, body []byte) e
 				return errAsyncImageEditInvalidImage
 			}
 			inputImages++
-			if inputImages > asyncImageEditMaxInputImages {
-				return errAsyncImageEditTooManyInputImages
+			if inputImages > maxInputImages {
+				return fmt.Errorf("%w (at most %d input images)", errAsyncImageEditTooManyInputImages, maxInputImages)
 			}
 			if firstImageSize == nil {
 				firstImageSize = &upload

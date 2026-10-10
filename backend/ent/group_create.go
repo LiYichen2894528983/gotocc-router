@@ -20,6 +20,7 @@ import (
 	"github.com/LuckyKuang/sub2api-plus/ent/user"
 	"github.com/LuckyKuang/sub2api-plus/ent/usersubscription"
 	"github.com/LuckyKuang/sub2api-plus/internal/domain"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
 )
 
 // GroupCreate is the builder for creating a Group entity.
@@ -302,6 +303,76 @@ func (_c *GroupCreate) SetNillableDefaultValidityDays(v *int) *GroupCreate {
 	return _c
 }
 
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (_c *GroupCreate) SetQuotaResetSourceAccountID(v int64) *GroupCreate {
+	_c.mutation.SetQuotaResetSourceAccountID(v)
+	return _c
+}
+
+// SetNillableQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableQuotaResetSourceAccountID(v *int64) *GroupCreate {
+	if v != nil {
+		_c.SetQuotaResetSourceAccountID(*v)
+	}
+	return _c
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (_c *GroupCreate) SetQuotaResetSourceAccountName(v string) *GroupCreate {
+	_c.mutation.SetQuotaResetSourceAccountName(v)
+	return _c
+}
+
+// SetNillableQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableQuotaResetSourceAccountName(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetQuotaResetSourceAccountName(*v)
+	}
+	return _c
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (_c *GroupCreate) SetQuotaResetSourceResetAt(v time.Time) *GroupCreate {
+	_c.mutation.SetQuotaResetSourceResetAt(v)
+	return _c
+}
+
+// SetNillableQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableQuotaResetSourceResetAt(v *time.Time) *GroupCreate {
+	if v != nil {
+		_c.SetQuotaResetSourceResetAt(*v)
+	}
+	return _c
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (_c *GroupCreate) SetQuotaResetIncludeMonthly(v bool) *GroupCreate {
+	_c.mutation.SetQuotaResetIncludeMonthly(v)
+	return _c
+}
+
+// SetNillableQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableQuotaResetIncludeMonthly(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetQuotaResetIncludeMonthly(*v)
+	}
+	return _c
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (_c *GroupCreate) SetQuotaResetConfigVersion(v int64) *GroupCreate {
+	_c.mutation.SetQuotaResetConfigVersion(v)
+	return _c
+}
+
+// SetNillableQuotaResetConfigVersion sets the "quota_reset_config_version" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableQuotaResetConfigVersion(v *int64) *GroupCreate {
+	if v != nil {
+		_c.SetQuotaResetConfigVersion(*v)
+	}
+	return _c
+}
+
 // SetAllowImageGeneration sets the "allow_image_generation" field.
 func (_c *GroupCreate) SetAllowImageGeneration(v bool) *GroupCreate {
 	_c.mutation.SetAllowImageGeneration(v)
@@ -495,6 +566,12 @@ func (_c *GroupCreate) SetNillableVideoPrice1080p(v *float64) *GroupCreate {
 	if v != nil {
 		_c.SetVideoPrice1080p(*v)
 	}
+	return _c
+}
+
+// SetVideoModels sets the "video_models" field.
+func (_c *GroupCreate) SetVideoModels(v videoprotocol.Models) *GroupCreate {
+	_c.mutation.SetVideoModels(v)
 	return _c
 }
 
@@ -802,16 +879,30 @@ func (_c *GroupCreate) SetNillableMessagesDispatchModelConfig(v *domain.OpenAIMe
 	return _c
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (_c *GroupCreate) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupCreate {
-	_c.mutation.SetModelsListConfig(v)
+// SetModelAllowlist sets the "model_allowlist" field.
+func (_c *GroupCreate) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupCreate {
+	_c.mutation.SetModelAllowlist(v)
 	return _c
 }
 
-// SetNillableModelsListConfig sets the "models_list_config" field if the given value is not nil.
-func (_c *GroupCreate) SetNillableModelsListConfig(v *domain.GroupModelsListConfig) *GroupCreate {
+// SetNillableModelAllowlist sets the "model_allowlist" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableModelAllowlist(v *domain.GroupModelAllowlist) *GroupCreate {
 	if v != nil {
-		_c.SetModelsListConfig(*v)
+		_c.SetModelAllowlist(*v)
+	}
+	return _c
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (_c *GroupCreate) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupCreate {
+	_c.mutation.SetCodexModelsManifestConfig(v)
+	return _c
+}
+
+// SetNillableCodexModelsManifestConfig sets the "codex_models_manifest_config" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableCodexModelsManifestConfig(v *domain.GroupCodexModelsManifestConfig) *GroupCreate {
+	if v != nil {
+		_c.SetCodexModelsManifestConfig(*v)
 	}
 	return _c
 }
@@ -1087,6 +1178,18 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultDefaultValidityDays
 		_c.mutation.SetDefaultValidityDays(v)
 	}
+	if _, ok := _c.mutation.QuotaResetSourceAccountName(); !ok {
+		v := group.DefaultQuotaResetSourceAccountName
+		_c.mutation.SetQuotaResetSourceAccountName(v)
+	}
+	if _, ok := _c.mutation.QuotaResetIncludeMonthly(); !ok {
+		v := group.DefaultQuotaResetIncludeMonthly
+		_c.mutation.SetQuotaResetIncludeMonthly(v)
+	}
+	if _, ok := _c.mutation.QuotaResetConfigVersion(); !ok {
+		v := group.DefaultQuotaResetConfigVersion
+		_c.mutation.SetQuotaResetConfigVersion(v)
+	}
 	if _, ok := _c.mutation.AllowImageGeneration(); !ok {
 		v := group.DefaultAllowImageGeneration
 		_c.mutation.SetAllowImageGeneration(v)
@@ -1118,6 +1221,10 @@ func (_c *GroupCreate) defaults() error {
 	if _, ok := _c.mutation.VideoRateMultiplier(); !ok {
 		v := group.DefaultVideoRateMultiplier
 		_c.mutation.SetVideoRateMultiplier(v)
+	}
+	if _, ok := _c.mutation.VideoModels(); !ok {
+		v := group.DefaultVideoModels
+		_c.mutation.SetVideoModels(v)
 	}
 	if _, ok := _c.mutation.LongContextPricingEnabled(); !ok {
 		v := group.DefaultLongContextPricingEnabled
@@ -1175,9 +1282,13 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultMessagesDispatchModelConfig
 		_c.mutation.SetMessagesDispatchModelConfig(v)
 	}
-	if _, ok := _c.mutation.ModelsListConfig(); !ok {
-		v := group.DefaultModelsListConfig
-		_c.mutation.SetModelsListConfig(v)
+	if _, ok := _c.mutation.ModelAllowlist(); !ok {
+		v := group.DefaultModelAllowlist
+		_c.mutation.SetModelAllowlist(v)
+	}
+	if _, ok := _c.mutation.CodexModelsManifestConfig(); !ok {
+		v := group.DefaultCodexModelsManifestConfig
+		_c.mutation.SetCodexModelsManifestConfig(v)
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		v := group.DefaultRpmLimit
@@ -1286,6 +1397,20 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		return &ValidationError{Name: "default_validity_days", err: errors.New(`ent: missing required field "Group.default_validity_days"`)}
 	}
+	if _, ok := _c.mutation.QuotaResetSourceAccountName(); !ok {
+		return &ValidationError{Name: "quota_reset_source_account_name", err: errors.New(`ent: missing required field "Group.quota_reset_source_account_name"`)}
+	}
+	if v, ok := _c.mutation.QuotaResetSourceAccountName(); ok {
+		if err := group.QuotaResetSourceAccountNameValidator(v); err != nil {
+			return &ValidationError{Name: "quota_reset_source_account_name", err: fmt.Errorf(`ent: validator failed for field "Group.quota_reset_source_account_name": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.QuotaResetIncludeMonthly(); !ok {
+		return &ValidationError{Name: "quota_reset_include_monthly", err: errors.New(`ent: missing required field "Group.quota_reset_include_monthly"`)}
+	}
+	if _, ok := _c.mutation.QuotaResetConfigVersion(); !ok {
+		return &ValidationError{Name: "quota_reset_config_version", err: errors.New(`ent: missing required field "Group.quota_reset_config_version"`)}
+	}
 	if _, ok := _c.mutation.AllowImageGeneration(); !ok {
 		return &ValidationError{Name: "allow_image_generation", err: errors.New(`ent: missing required field "Group.allow_image_generation"`)}
 	}
@@ -1309,6 +1434,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.VideoRateMultiplier(); !ok {
 		return &ValidationError{Name: "video_rate_multiplier", err: errors.New(`ent: missing required field "Group.video_rate_multiplier"`)}
+	}
+	if _, ok := _c.mutation.VideoModels(); !ok {
+		return &ValidationError{Name: "video_models", err: errors.New(`ent: missing required field "Group.video_models"`)}
 	}
 	if v, ok := _c.mutation.SearchPricePer1k(); ok {
 		if err := group.SearchPricePer1kValidator(v); err != nil {
@@ -1377,8 +1505,11 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.MessagesDispatchModelConfig(); !ok {
 		return &ValidationError{Name: "messages_dispatch_model_config", err: errors.New(`ent: missing required field "Group.messages_dispatch_model_config"`)}
 	}
-	if _, ok := _c.mutation.ModelsListConfig(); !ok {
-		return &ValidationError{Name: "models_list_config", err: errors.New(`ent: missing required field "Group.models_list_config"`)}
+	if _, ok := _c.mutation.ModelAllowlist(); !ok {
+		return &ValidationError{Name: "model_allowlist", err: errors.New(`ent: missing required field "Group.model_allowlist"`)}
+	}
+	if _, ok := _c.mutation.CodexModelsManifestConfig(); !ok {
+		return &ValidationError{Name: "codex_models_manifest_config", err: errors.New(`ent: missing required field "Group.codex_models_manifest_config"`)}
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "Group.rpm_limit"`)}
@@ -1518,6 +1649,26 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
 		_node.DefaultValidityDays = value
 	}
+	if value, ok := _c.mutation.QuotaResetSourceAccountID(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceAccountID, field.TypeInt64, value)
+		_node.QuotaResetSourceAccountID = &value
+	}
+	if value, ok := _c.mutation.QuotaResetSourceAccountName(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceAccountName, field.TypeString, value)
+		_node.QuotaResetSourceAccountName = value
+	}
+	if value, ok := _c.mutation.QuotaResetSourceResetAt(); ok {
+		_spec.SetField(group.FieldQuotaResetSourceResetAt, field.TypeTime, value)
+		_node.QuotaResetSourceResetAt = &value
+	}
+	if value, ok := _c.mutation.QuotaResetIncludeMonthly(); ok {
+		_spec.SetField(group.FieldQuotaResetIncludeMonthly, field.TypeBool, value)
+		_node.QuotaResetIncludeMonthly = value
+	}
+	if value, ok := _c.mutation.QuotaResetConfigVersion(); ok {
+		_spec.SetField(group.FieldQuotaResetConfigVersion, field.TypeInt64, value)
+		_node.QuotaResetConfigVersion = value
+	}
 	if value, ok := _c.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
 		_node.AllowImageGeneration = value
@@ -1573,6 +1724,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.VideoPrice1080p(); ok {
 		_spec.SetField(group.FieldVideoPrice1080p, field.TypeFloat64, value)
 		_node.VideoPrice1080p = &value
+	}
+	if value, ok := _c.mutation.VideoModels(); ok {
+		_spec.SetField(group.FieldVideoModels, field.TypeJSON, value)
+		_node.VideoModels = value
 	}
 	if value, ok := _c.mutation.VideoModelPrices(); ok {
 		_spec.SetField(group.FieldVideoModelPrices, field.TypeJSON, value)
@@ -1670,9 +1825,13 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldMessagesDispatchModelConfig, field.TypeJSON, value)
 		_node.MessagesDispatchModelConfig = value
 	}
-	if value, ok := _c.mutation.ModelsListConfig(); ok {
-		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
-		_node.ModelsListConfig = value
+	if value, ok := _c.mutation.ModelAllowlist(); ok {
+		_spec.SetField(group.FieldModelAllowlist, field.TypeJSON, value)
+		_node.ModelAllowlist = value
+	}
+	if value, ok := _c.mutation.CodexModelsManifestConfig(); ok {
+		_spec.SetField(group.FieldCodexModelsManifestConfig, field.TypeJSON, value)
+		_node.CodexModelsManifestConfig = value
 	}
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2152,6 +2311,90 @@ func (u *GroupUpsert) AddDefaultValidityDays(v int) *GroupUpsert {
 	return u
 }
 
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (u *GroupUpsert) SetQuotaResetSourceAccountID(v int64) *GroupUpsert {
+	u.Set(group.FieldQuotaResetSourceAccountID, v)
+	return u
+}
+
+// UpdateQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateQuotaResetSourceAccountID() *GroupUpsert {
+	u.SetExcluded(group.FieldQuotaResetSourceAccountID)
+	return u
+}
+
+// AddQuotaResetSourceAccountID adds v to the "quota_reset_source_account_id" field.
+func (u *GroupUpsert) AddQuotaResetSourceAccountID(v int64) *GroupUpsert {
+	u.Add(group.FieldQuotaResetSourceAccountID, v)
+	return u
+}
+
+// ClearQuotaResetSourceAccountID clears the value of the "quota_reset_source_account_id" field.
+func (u *GroupUpsert) ClearQuotaResetSourceAccountID() *GroupUpsert {
+	u.SetNull(group.FieldQuotaResetSourceAccountID)
+	return u
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (u *GroupUpsert) SetQuotaResetSourceAccountName(v string) *GroupUpsert {
+	u.Set(group.FieldQuotaResetSourceAccountName, v)
+	return u
+}
+
+// UpdateQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateQuotaResetSourceAccountName() *GroupUpsert {
+	u.SetExcluded(group.FieldQuotaResetSourceAccountName)
+	return u
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (u *GroupUpsert) SetQuotaResetSourceResetAt(v time.Time) *GroupUpsert {
+	u.Set(group.FieldQuotaResetSourceResetAt, v)
+	return u
+}
+
+// UpdateQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateQuotaResetSourceResetAt() *GroupUpsert {
+	u.SetExcluded(group.FieldQuotaResetSourceResetAt)
+	return u
+}
+
+// ClearQuotaResetSourceResetAt clears the value of the "quota_reset_source_reset_at" field.
+func (u *GroupUpsert) ClearQuotaResetSourceResetAt() *GroupUpsert {
+	u.SetNull(group.FieldQuotaResetSourceResetAt)
+	return u
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (u *GroupUpsert) SetQuotaResetIncludeMonthly(v bool) *GroupUpsert {
+	u.Set(group.FieldQuotaResetIncludeMonthly, v)
+	return u
+}
+
+// UpdateQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateQuotaResetIncludeMonthly() *GroupUpsert {
+	u.SetExcluded(group.FieldQuotaResetIncludeMonthly)
+	return u
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (u *GroupUpsert) SetQuotaResetConfigVersion(v int64) *GroupUpsert {
+	u.Set(group.FieldQuotaResetConfigVersion, v)
+	return u
+}
+
+// UpdateQuotaResetConfigVersion sets the "quota_reset_config_version" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateQuotaResetConfigVersion() *GroupUpsert {
+	u.SetExcluded(group.FieldQuotaResetConfigVersion)
+	return u
+}
+
+// AddQuotaResetConfigVersion adds v to the "quota_reset_config_version" field.
+func (u *GroupUpsert) AddQuotaResetConfigVersion(v int64) *GroupUpsert {
+	u.Add(group.FieldQuotaResetConfigVersion, v)
+	return u
+}
+
 // SetAllowImageGeneration sets the "allow_image_generation" field.
 func (u *GroupUpsert) SetAllowImageGeneration(v bool) *GroupUpsert {
 	u.Set(group.FieldAllowImageGeneration, v)
@@ -2413,6 +2656,18 @@ func (u *GroupUpsert) AddVideoPrice1080p(v float64) *GroupUpsert {
 // ClearVideoPrice1080p clears the value of the "video_price_1080p" field.
 func (u *GroupUpsert) ClearVideoPrice1080p() *GroupUpsert {
 	u.SetNull(group.FieldVideoPrice1080p)
+	return u
+}
+
+// SetVideoModels sets the "video_models" field.
+func (u *GroupUpsert) SetVideoModels(v videoprotocol.Models) *GroupUpsert {
+	u.Set(group.FieldVideoModels, v)
+	return u
+}
+
+// UpdateVideoModels sets the "video_models" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateVideoModels() *GroupUpsert {
+	u.SetExcluded(group.FieldVideoModels)
 	return u
 }
 
@@ -2812,15 +3067,27 @@ func (u *GroupUpsert) UpdateMessagesDispatchModelConfig() *GroupUpsert {
 	return u
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (u *GroupUpsert) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpsert {
-	u.Set(group.FieldModelsListConfig, v)
+// SetModelAllowlist sets the "model_allowlist" field.
+func (u *GroupUpsert) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpsert {
+	u.Set(group.FieldModelAllowlist, v)
 	return u
 }
 
-// UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
-func (u *GroupUpsert) UpdateModelsListConfig() *GroupUpsert {
-	u.SetExcluded(group.FieldModelsListConfig)
+// UpdateModelAllowlist sets the "model_allowlist" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateModelAllowlist() *GroupUpsert {
+	u.SetExcluded(group.FieldModelAllowlist)
+	return u
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (u *GroupUpsert) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpsert {
+	u.Set(group.FieldCodexModelsManifestConfig, v)
+	return u
+}
+
+// UpdateCodexModelsManifestConfig sets the "codex_models_manifest_config" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateCodexModelsManifestConfig() *GroupUpsert {
+	u.SetExcluded(group.FieldCodexModelsManifestConfig)
 	return u
 }
 
@@ -3317,6 +3584,104 @@ func (u *GroupUpsertOne) UpdateDefaultValidityDays() *GroupUpsertOne {
 	})
 }
 
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (u *GroupUpsertOne) SetQuotaResetSourceAccountID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetSourceAccountID(v)
+	})
+}
+
+// AddQuotaResetSourceAccountID adds v to the "quota_reset_source_account_id" field.
+func (u *GroupUpsertOne) AddQuotaResetSourceAccountID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddQuotaResetSourceAccountID(v)
+	})
+}
+
+// UpdateQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateQuotaResetSourceAccountID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetSourceAccountID()
+	})
+}
+
+// ClearQuotaResetSourceAccountID clears the value of the "quota_reset_source_account_id" field.
+func (u *GroupUpsertOne) ClearQuotaResetSourceAccountID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearQuotaResetSourceAccountID()
+	})
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (u *GroupUpsertOne) SetQuotaResetSourceAccountName(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetSourceAccountName(v)
+	})
+}
+
+// UpdateQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateQuotaResetSourceAccountName() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetSourceAccountName()
+	})
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (u *GroupUpsertOne) SetQuotaResetSourceResetAt(v time.Time) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetSourceResetAt(v)
+	})
+}
+
+// UpdateQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateQuotaResetSourceResetAt() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetSourceResetAt()
+	})
+}
+
+// ClearQuotaResetSourceResetAt clears the value of the "quota_reset_source_reset_at" field.
+func (u *GroupUpsertOne) ClearQuotaResetSourceResetAt() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearQuotaResetSourceResetAt()
+	})
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (u *GroupUpsertOne) SetQuotaResetIncludeMonthly(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetIncludeMonthly(v)
+	})
+}
+
+// UpdateQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateQuotaResetIncludeMonthly() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetIncludeMonthly()
+	})
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (u *GroupUpsertOne) SetQuotaResetConfigVersion(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetConfigVersion(v)
+	})
+}
+
+// AddQuotaResetConfigVersion adds v to the "quota_reset_config_version" field.
+func (u *GroupUpsertOne) AddQuotaResetConfigVersion(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddQuotaResetConfigVersion(v)
+	})
+}
+
+// UpdateQuotaResetConfigVersion sets the "quota_reset_config_version" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateQuotaResetConfigVersion() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetConfigVersion()
+	})
+}
+
 // SetAllowImageGeneration sets the "allow_image_generation" field.
 func (u *GroupUpsertOne) SetAllowImageGeneration(v bool) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -3622,6 +3987,20 @@ func (u *GroupUpsertOne) UpdateVideoPrice1080p() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearVideoPrice1080p() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearVideoPrice1080p()
+	})
+}
+
+// SetVideoModels sets the "video_models" field.
+func (u *GroupUpsertOne) SetVideoModels(v videoprotocol.Models) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetVideoModels(v)
+	})
+}
+
+// UpdateVideoModels sets the "video_models" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateVideoModels() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateVideoModels()
 	})
 }
 
@@ -4087,17 +4466,31 @@ func (u *GroupUpsertOne) UpdateMessagesDispatchModelConfig() *GroupUpsertOne {
 	})
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (u *GroupUpsertOne) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpsertOne {
+// SetModelAllowlist sets the "model_allowlist" field.
+func (u *GroupUpsertOne) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
-		s.SetModelsListConfig(v)
+		s.SetModelAllowlist(v)
 	})
 }
 
-// UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
-func (u *GroupUpsertOne) UpdateModelsListConfig() *GroupUpsertOne {
+// UpdateModelAllowlist sets the "model_allowlist" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateModelAllowlist() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
-		s.UpdateModelsListConfig()
+		s.UpdateModelAllowlist()
+	})
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (u *GroupUpsertOne) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCodexModelsManifestConfig(v)
+	})
+}
+
+// UpdateCodexModelsManifestConfig sets the "codex_models_manifest_config" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateCodexModelsManifestConfig() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCodexModelsManifestConfig()
 	})
 }
 
@@ -4777,6 +5170,104 @@ func (u *GroupUpsertBulk) UpdateDefaultValidityDays() *GroupUpsertBulk {
 	})
 }
 
+// SetQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field.
+func (u *GroupUpsertBulk) SetQuotaResetSourceAccountID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetSourceAccountID(v)
+	})
+}
+
+// AddQuotaResetSourceAccountID adds v to the "quota_reset_source_account_id" field.
+func (u *GroupUpsertBulk) AddQuotaResetSourceAccountID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddQuotaResetSourceAccountID(v)
+	})
+}
+
+// UpdateQuotaResetSourceAccountID sets the "quota_reset_source_account_id" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateQuotaResetSourceAccountID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetSourceAccountID()
+	})
+}
+
+// ClearQuotaResetSourceAccountID clears the value of the "quota_reset_source_account_id" field.
+func (u *GroupUpsertBulk) ClearQuotaResetSourceAccountID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearQuotaResetSourceAccountID()
+	})
+}
+
+// SetQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field.
+func (u *GroupUpsertBulk) SetQuotaResetSourceAccountName(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetSourceAccountName(v)
+	})
+}
+
+// UpdateQuotaResetSourceAccountName sets the "quota_reset_source_account_name" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateQuotaResetSourceAccountName() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetSourceAccountName()
+	})
+}
+
+// SetQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field.
+func (u *GroupUpsertBulk) SetQuotaResetSourceResetAt(v time.Time) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetSourceResetAt(v)
+	})
+}
+
+// UpdateQuotaResetSourceResetAt sets the "quota_reset_source_reset_at" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateQuotaResetSourceResetAt() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetSourceResetAt()
+	})
+}
+
+// ClearQuotaResetSourceResetAt clears the value of the "quota_reset_source_reset_at" field.
+func (u *GroupUpsertBulk) ClearQuotaResetSourceResetAt() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearQuotaResetSourceResetAt()
+	})
+}
+
+// SetQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field.
+func (u *GroupUpsertBulk) SetQuotaResetIncludeMonthly(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetIncludeMonthly(v)
+	})
+}
+
+// UpdateQuotaResetIncludeMonthly sets the "quota_reset_include_monthly" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateQuotaResetIncludeMonthly() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetIncludeMonthly()
+	})
+}
+
+// SetQuotaResetConfigVersion sets the "quota_reset_config_version" field.
+func (u *GroupUpsertBulk) SetQuotaResetConfigVersion(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetQuotaResetConfigVersion(v)
+	})
+}
+
+// AddQuotaResetConfigVersion adds v to the "quota_reset_config_version" field.
+func (u *GroupUpsertBulk) AddQuotaResetConfigVersion(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddQuotaResetConfigVersion(v)
+	})
+}
+
+// UpdateQuotaResetConfigVersion sets the "quota_reset_config_version" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateQuotaResetConfigVersion() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateQuotaResetConfigVersion()
+	})
+}
+
 // SetAllowImageGeneration sets the "allow_image_generation" field.
 func (u *GroupUpsertBulk) SetAllowImageGeneration(v bool) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -5082,6 +5573,20 @@ func (u *GroupUpsertBulk) UpdateVideoPrice1080p() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearVideoPrice1080p() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearVideoPrice1080p()
+	})
+}
+
+// SetVideoModels sets the "video_models" field.
+func (u *GroupUpsertBulk) SetVideoModels(v videoprotocol.Models) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetVideoModels(v)
+	})
+}
+
+// UpdateVideoModels sets the "video_models" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateVideoModels() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateVideoModels()
 	})
 }
 
@@ -5547,17 +6052,31 @@ func (u *GroupUpsertBulk) UpdateMessagesDispatchModelConfig() *GroupUpsertBulk {
 	})
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (u *GroupUpsertBulk) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpsertBulk {
+// SetModelAllowlist sets the "model_allowlist" field.
+func (u *GroupUpsertBulk) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
-		s.SetModelsListConfig(v)
+		s.SetModelAllowlist(v)
 	})
 }
 
-// UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
-func (u *GroupUpsertBulk) UpdateModelsListConfig() *GroupUpsertBulk {
+// UpdateModelAllowlist sets the "model_allowlist" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateModelAllowlist() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
-		s.UpdateModelsListConfig()
+		s.UpdateModelAllowlist()
+	})
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (u *GroupUpsertBulk) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCodexModelsManifestConfig(v)
+	})
+}
+
+// UpdateCodexModelsManifestConfig sets the "codex_models_manifest_config" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateCodexModelsManifestConfig() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCodexModelsManifestConfig()
 	})
 }
 

@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from './client'
-import type { RedeemCodeRequest } from '@/types'
+import type { PaginatedResponse, RedeemCodeRequest } from '@/types'
 
 export interface RedeemHistoryItem {
   id: number
@@ -28,34 +28,24 @@ export interface RedeemHistoryItem {
 /**
  * Redeem a code
  * @param code - Redeem code string
- * @returns Redemption result with updated balance or concurrency
+ * @returns The redeemed code record (type, value, validity days and group)
  */
-export async function redeem(code: string): Promise<{
-  message: string
-  type: string
-  value: number
-  new_balance?: number
-  new_concurrency?: number
-}> {
+export async function redeem(code: string): Promise<RedeemHistoryItem> {
   const payload: RedeemCodeRequest = { code }
 
-  const { data } = await apiClient.post<{
-    message: string
-    type: string
-    value: number
-    new_balance?: number
-    new_concurrency?: number
-  }>('/redeem', payload)
+  const { data } = await apiClient.post<RedeemHistoryItem>('/redeem', payload)
 
   return data
 }
 
 /**
  * Get user's redemption history
- * @returns List of redeemed codes
+ * @returns The requested page of redeemed codes and the total count
  */
-export async function getHistory(): Promise<RedeemHistoryItem[]> {
-  const { data } = await apiClient.get<RedeemHistoryItem[]>('/redeem/history')
+export async function getHistory(page = 1, pageSize = 20): Promise<PaginatedResponse<RedeemHistoryItem>> {
+  const { data } = await apiClient.get<PaginatedResponse<RedeemHistoryItem>>('/redeem/history', {
+    params: { page, page_size: pageSize }
+  })
   return data
 }
 

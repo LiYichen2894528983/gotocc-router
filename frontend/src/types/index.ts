@@ -1,3 +1,4 @@
+import type { VideoModelConfig } from '@/components/admin/channel/video-models'
 /**
  * Core Type Definitions for Sub2API Frontend
  */
@@ -63,7 +64,10 @@ export interface UserProfileSourceContext {
   provider_label?: string | null
 }
 
+export interface ResellerCustomerAccount { user_id: number; owner_id: number; owner_name: string; credit_balance: number; frozen_credit: number; contact_info: string; announcements_enabled: boolean }
+
 export interface User {
+  reseller_customer?: ResellerCustomerAccount | null
   id: number
   username: string
   email: string
@@ -146,6 +150,7 @@ export interface RegisterRequest {
 }
 
 export interface AffiliateInvitee {
+  level: number
   user_id: number
   email: string
   username: string
@@ -153,7 +158,17 @@ export interface AffiliateInvitee {
   total_rebate: number
 }
 
+/** LC-024 agent enrollment state. An empty status means the user never applied. */
+export interface AgentProfile {
+  user_id: number
+  status: '' | 'approved'
+  source?: 'applied' | 'grandfathered' | ''
+  applied_at?: string | null
+  reviewed_at?: string | null
+}
+
 export interface UserAffiliateDetail {
+  show_rebate_details: boolean
   user_id: number
   aff_code: string
   inviter_id?: number | null
@@ -161,7 +176,8 @@ export interface UserAffiliateDetail {
   aff_quota: number
   aff_frozen_quota: number
   aff_history_quota: number
-  /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
+  /** 按与充值用户的距离排列的一、二、三代返佣比例，单位为百分比。 */
+  rebate_rates_percent: number[]
   effective_rebate_rate_percent: number
   invitees: AffiliateInvitee[]
 }
@@ -191,6 +207,7 @@ export interface CustomMenuItem {
   icon_svg: string
   url: string
   page_slug?: string
+  hide_open_button?: boolean
   visibility: 'user' | 'admin'
   sort_order: number
 }
@@ -216,6 +233,7 @@ export interface PublicSettings {
   promo_code_enabled: boolean
   password_reset_enabled: boolean
   invitation_code_enabled: boolean
+  reseller_invitation_required?: boolean
   login_agreement_enabled?: boolean
   login_agreement_mode?: 'modal' | 'checkbox' | string
   login_agreement_updated_at?: string
@@ -269,14 +287,20 @@ export interface PublicSettings {
   account_quota_notify_enabled: boolean
   balance_low_notify_threshold: number
   channel_monitor_enabled: boolean
-  /** Exclusive mode: v1 active probes or v2 passive aggregation. Default v2. */
-  channel_monitor_mode?: 'v1' | 'v2'
+  /** Exclusive mode: v1 active probes, v2 private analytics, or v3 service status. Default v1. */
+  channel_monitor_mode?: 'v1' | 'v2' | 'v3'
   channel_monitor_default_interval_seconds: number
   /** When true, user monitor hides RPM/TPM so scale cannot be reverse-estimated. */
   channel_monitor_hide_throughput?: boolean
   /** When true, user monitor shows account quota/balance snapshots (default off). */
   channel_monitor_show_quota?: boolean
+  /** When true, user monitor hides the user ranking tab and /users payload. */
+  channel_monitor_hide_user_ranking?: boolean
   available_channels_enabled: boolean
+  /** When false, the whole user-facing subscription surface is hidden. Default true. */
+  subscription_enabled: boolean
+  /** Mirrors payment config BALANCE_PAYMENT_DISABLED; true = balance top-up closed (subscription-only site). */
+  payment_balance_disabled: boolean
   model_plaza_enabled: boolean
   model_plaza_require_auth: boolean
   plugin_management_enabled: boolean
@@ -534,7 +558,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'stepfun' | 'opencode_go' | 'video' | 'typesafe' | 'composite'
 export type ApiKeyRoutingMode = 'fixed' | 'auto'
 
 // The server owns the calculation of these capabilities. They are advisory for
@@ -573,7 +597,7 @@ export interface Group {
   platform: GroupPlatform
   rate_multiplier: number
   rpm_limit?: number // Group-level RPM cap (0 = unlimited); overrides user-level rpm_limit when set
-  max_reasoning_effort?: string // OpenAI/Codex reasoning ceiling; empty means unlimited
+  max_reasoning_effort?: string // Anthropic/OpenAI reasoning ceiling; empty means unlimited
   max_reasoning_effort_over_limit?: string // downgrade (default) or deny when over the ceiling
   reasoning_effort_mappings?: ReasoningEffortMapping[]
   is_exclusive: boolean
@@ -601,6 +625,7 @@ export interface Group {
   video_price_1080p: number | null
   // Optional model-family x resolution overrides for Grok video pricing.
   video_model_prices?: VideoModelPrices
+  video_models?: Record<string, VideoModelConfig>
   // Codex 网页搜索单次价格（USD/次）；null 表示使用默认价 0.01
   web_search_price_per_call: number | null
   // Grok Voice 显式定价（分组级）
@@ -657,15 +682,30 @@ export interface AdminGroup extends Group {
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
-  models_list_config?: ModelsListConfig
+  model_allowlist?: ModelAllowlist
+  codex_models_manifest_config?: CodexModelsManifestConfig
 
   // 分组排序
   sort_order: number
+
+  // OpenAI OAuth 官方周窗口跟随重置（仅管理员可见）
+  quota_reset_source_account_id?: number | null
+  quota_reset_source_account_name?: string
+  quota_reset_source_reset_at?: string | null
+  quota_reset_include_monthly?: boolean
+  quota_reset_source_status?: 'disabled' | 'waiting' | 'active' | 'invalid'
 }
 
-export interface ModelsListConfig {
+export interface ModelAllowlist {
   enabled: boolean
   models: string[]
+}
+
+// 固定账号获取 Codex Model Manifest 配置（仅 openai 分组）
+export interface CodexModelsManifestConfig {
+  enabled: boolean
+  account_ids: number[]
+  fallback_to_scheduler: boolean
 }
 
 export type CompositeRouteMatchType = 'exact' | 'prefix'
@@ -805,6 +845,8 @@ export interface CreateGroupRequest {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   five_hour_limit_usd?: number | null
+  quota_reset_source_account_id?: number | null
+  quota_reset_include_monthly?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
   free_openai_fast?: boolean
@@ -824,6 +866,7 @@ export interface CreateGroupRequest {
   video_price_720p?: number | null
   video_price_1080p?: number | null
   video_model_prices?: VideoModelPrices
+  video_models?: Record<string, VideoModelConfig>
   web_search_price_per_call?: number | null
   search_price_per_1k?: number | null
   audio_realtime_price_per_min?: number | null
@@ -842,7 +885,8 @@ export interface CreateGroupRequest {
   fallback_group_id_on_invalid_request?: number | null
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
-  models_list_config?: ModelsListConfig
+  model_allowlist?: ModelAllowlist
+  codex_models_manifest_config?: CodexModelsManifestConfig
   allow_messages_dispatch?: boolean
   allow_live?: boolean
   default_mapped_model?: string
@@ -871,6 +915,8 @@ export interface UpdateGroupRequest {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   five_hour_limit_usd?: number | null
+  quota_reset_source_account_id?: number | null
+  quota_reset_include_monthly?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
   free_openai_fast?: boolean
@@ -890,6 +936,7 @@ export interface UpdateGroupRequest {
   video_price_720p?: number | null
   video_price_1080p?: number | null
   video_model_prices?: VideoModelPrices
+  video_models?: Record<string, VideoModelConfig>
   web_search_price_per_call?: number | null
   search_price_per_1k?: number | null
   audio_realtime_price_per_min?: number | null
@@ -908,7 +955,8 @@ export interface UpdateGroupRequest {
   fallback_group_id_on_invalid_request?: number | null
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
-  models_list_config?: ModelsListConfig
+  model_allowlist?: ModelAllowlist
+  codex_models_manifest_config?: CodexModelsManifestConfig
   allow_messages_dispatch?: boolean
   allow_live?: boolean
   default_mapped_model?: string
@@ -926,7 +974,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'stepfun' | 'opencode_go' | 'video' | 'typesafe'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -966,6 +1014,8 @@ export interface Proxy {
   fallback_mode: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days: number
+  egress_timezone?: string
+  egress_country?: string
   created_at: string
   updated_at: string
 }
@@ -1242,6 +1292,10 @@ export interface Account {
   parent_chatgpt_account_id?: string
 }
 
+// The admin account list may return this compact shape when lite=1. Detail
+// operations still use Account from /admin/accounts/:id.
+export type AccountListItem = Omit<Account, 'groups'>
+
 export interface AccountSchedulerGroupScore {
   group_id?: number | null
   group_name?: string
@@ -1399,7 +1453,7 @@ export interface CodexUsageSnapshot {
 
 export type OpenAICompactMode = 'auto' | 'force_on' | 'force_off'
 export type OpenAIResponsesMode = 'auto' | 'force_responses' | 'force_chat_completions'
-export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings'
+export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings' | 'seedance'
 
 export interface OpenAICompactState {
   openai_compact_mode?: OpenAICompactMode
@@ -1451,6 +1505,15 @@ export interface UpdateAccountRequest {
   confirm_mixed_channel_risk?: boolean
 }
 
+export type GrokMediaEligibilityMode = 'auto' | 'enabled' | 'disabled'
+
+export interface GrokMediaEligibilityState {
+  account_id: number
+  mode: GrokMediaEligibilityMode
+  eligible: boolean
+  reason: string
+}
+
 export interface CheckMixedChannelRequest {
   platform: AccountPlatform
   group_ids: number[]
@@ -1482,6 +1545,8 @@ export interface CreateProxyRequest {
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days?: number
+  egress_timezone?: string
+  egress_country?: string
 }
 
 export interface UpdateProxyRequest {
@@ -1496,6 +1561,8 @@ export interface UpdateProxyRequest {
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days?: number
+  egress_timezone?: string
+  egress_country?: string
 }
 
 export interface AdminDataPayload {
@@ -1663,8 +1730,9 @@ export interface UsageLog {
   duration_ms: number | null
   first_token_ms: number | null
   last_token_ms: number | null
+  timing_version?: number
   first_output_ms: number | null
-  first_output_kind: 'text' | 'reasoning' | 'tool' | 'image' | 'audio' | null
+  first_output_kind: 'text' | 'reasoning' | 'tool' | 'image' | 'audio' | 'compaction' | null
   is_complete: boolean | null
   completion_status: UsageCompletionStatus
   usage_source: UsageSource
@@ -1714,6 +1782,7 @@ export interface AdminUsageLog extends UsageLog {
   upstream_response_model?: string | null
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
+  upstream_request_id?: string | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null
@@ -1969,6 +2038,12 @@ export interface ApiKeyUsageTrendPoint {
 // ==================== Admin User Management ====================
 
 export interface UpdateUserRequest {
+  inviter_change?: {
+    code_type: 'permanent' | 'aff'
+    code: string
+    resolved_user_id: number
+    expected_version: number
+  }
   email?: string
   password?: string
   username?: string

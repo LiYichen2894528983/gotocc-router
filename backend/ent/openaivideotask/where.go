@@ -54,6 +54,11 @@ func IDLTE(id int64) predicate.OpenAIVideoTask {
 	return predicate.OpenAIVideoTask(sql.FieldLTE(FieldID, id))
 }
 
+// TeamWallet applies equality check predicate on the "team_wallet" field. It's identical to TeamWalletEQ.
+func TeamWallet(v bool) predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldEQ(FieldTeamWallet, v))
+}
+
 // LocalRequestID applies equality check predicate on the "local_request_id" field. It's identical to LocalRequestIDEQ.
 func LocalRequestID(v string) predicate.OpenAIVideoTask {
 	return predicate.OpenAIVideoTask(sql.FieldEQ(FieldLocalRequestID, v))
@@ -272,6 +277,36 @@ func SettledAt(v time.Time) predicate.OpenAIVideoTask {
 // UsageRecordedAt applies equality check predicate on the "usage_recorded_at" field. It's identical to UsageRecordedAtEQ.
 func UsageRecordedAt(v time.Time) predicate.OpenAIVideoTask {
 	return predicate.OpenAIVideoTask(sql.FieldEQ(FieldUsageRecordedAt, v))
+}
+
+// ResellerSnapshotIsNil applies the IsNil predicate on the "reseller_snapshot" field.
+func ResellerSnapshotIsNil() predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldIsNull(FieldResellerSnapshot))
+}
+
+// ResellerSnapshotNotNil applies the NotNil predicate on the "reseller_snapshot" field.
+func ResellerSnapshotNotNil() predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldNotNull(FieldResellerSnapshot))
+}
+
+// TeamWalletEQ applies the EQ predicate on the "team_wallet" field.
+func TeamWalletEQ(v bool) predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldEQ(FieldTeamWallet, v))
+}
+
+// TeamWalletNEQ applies the NEQ predicate on the "team_wallet" field.
+func TeamWalletNEQ(v bool) predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldNEQ(FieldTeamWallet, v))
+}
+
+// ProviderConfigIsNil applies the IsNil predicate on the "provider_config" field.
+func ProviderConfigIsNil() predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldIsNull(FieldProviderConfig))
+}
+
+// ProviderConfigNotNil applies the NotNil predicate on the "provider_config" field.
+func ProviderConfigNotNil() predicate.OpenAIVideoTask {
+	return predicate.OpenAIVideoTask(sql.FieldNotNull(FieldProviderConfig))
 }
 
 // LocalRequestIDEQ applies the EQ predicate on the "local_request_id" field.

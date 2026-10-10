@@ -4,9 +4,32 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
+import {
+  allModels,
+  buildModelMappingObject,
+  getModelsByPlatform,
+  getPresetMappingsByPlatform,
+  splitModelMappingObject
+} from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
+  it.each([
+    ['deepseek', ['deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-flash', 'deepseek-v4-flash-0731', 'deepseek-v4-pro', 'deepseek-v4-pro-0813'], ['deepseek-r1']],
+    ['kimi', ['kimi-k3', 'kimi-k2.7-code-highspeed', 'kimi-for-coding-highspeed'], ['moonshot-v1-8k', 'kimi-latest', 'kimi-k2']],
+    ['zhipu', ['glm-5.3-flashx', 'glm-5.2', 'glm-4.6v'], ['chatglm_turbo', 'cogvideo']],
+    ['minimax', ['MiniMax-M3.1-Flash-Preview', 'MiniMax-M3', 'MiniMax-M2.7-highspeed'], ['abab6.5-chat', 'abab5.5-chat']],
+    ['stepfun', ['step-5-preview', 'step-3.7-flash', 'step-3.5-flash-2603', 'step-3.5-flash', 'step-router-v1'], ['step-image', 'step-tts']],
+  ])('uses current official %s models in both platform and combined options', (platform, current, removed) => {
+    const models = getModelsByPlatform(platform as string)
+    expect(new Set(models).size).toBe(models.length)
+    expect(models.some(model => model.startsWith('claude-'))).toBe(false)
+    for (const model of current) {
+      expect(models).toContain(model)
+      expect(allModels.some(option => option.value === model)).toBe(true)
+    }
+    for (const model of removed) expect(models).not.toContain(model)
+  })
+
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
     const models = getModelsByPlatform('openai')
 
@@ -15,6 +38,50 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gpt-5.4-2026-03-05')
     expect(models).toContain('codex-auto-review')
     expect(models).toContain('gpt-5.6')
+    expect(models).toContain('gpt-6-astra')
+    expect(models).toContain('gpt-6.1-sol')
+    expect(models).toContain('gpt-6-sol')
+    expect(models).toContain('gpt-6-luna')
+    expect(models).not.toContain('gpt-6')
+    expect(new Set(models).size).toBe(models.length)
+  })
+
+  it('openai 预设映射将最新旗舰模型放在首位', () => {
+    const presets = getPresetMappingsByPlatform('openai')
+
+    expect(presets[0]).toMatchObject({
+      from: 'gpt-6-astra',
+      to: 'gpt-6-astra'
+    })
+    expect(presets.some(preset => preset.from === 'gpt-6')).toBe(false)
+    expect(presets.map(preset => preset.from).slice(0, 11)).toEqual([
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6-sol',
+      'gpt-6-luna',
+      'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4',
+      'claude-haiku-4-5-20251001'
+    ])
+  })
+
+  it('openai 模型列表按新系列优先排列', () => {
+    expect(getModelsByPlatform('openai').slice(0, 10)).toEqual([
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6-sol',
+      'gpt-6-luna',
+      'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4'
+    ])
   })
 
   it('openai 模型列表不再暴露已下线的 ChatGPT 登录 Codex 模型', () => {
@@ -41,8 +108,21 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5-1')
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5')
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
+    expect(getModelsByPlatform('claude')).toContain('claude-opus-5-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5-5')
+    expect(getModelsByPlatform('claude')).toContain('claude-sonnet-5-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
     expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
+  })
+
+  it('Claude Sonnet 5.5 预设使用各平台的官方模型 ID', () => {
+    expect(getPresetMappingsByPlatform('claude')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5-5' })
+    ]))
+    expect(getPresetMappingsByPlatform('bedrock')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'global.anthropic.claude-sonnet-5-5' })
+    ]))
   })
 
   it('xAI 模型列表包含 Grok 4.5 官方模型和别名', () => {
@@ -142,6 +222,19 @@ describe('useModelWhitelist', () => {
     expect(mapping).toEqual({
       'gpt-5.4': 'gpt-5.4-mini',
       'gpt-latest': 'gpt-5.4'
+    })
+  })
+
+  it('combined mode retains a mapping when a whitelist entry has the same source', () => {
+    expect(buildModelMappingObject('combined', ['gpt-latest'], [{ from: 'gpt-latest', to: 'deepseek-chat' }])).toEqual({
+      'gpt-latest': 'deepseek-chat'
+    })
+  })
+
+  it('split mapping keeps only identity entries in the whitelist after reopening', () => {
+    expect(splitModelMappingObject({ 'gpt-latest': 'deepseek-chat', 'gpt-5.4': 'gpt-5.4' })).toEqual({
+      allowedModels: ['gpt-5.4'],
+      modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }]
     })
   })
 

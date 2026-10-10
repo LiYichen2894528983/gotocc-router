@@ -206,6 +206,7 @@ export default {
     usedQuota: 'Used Quota',
     resetNow: 'Resetting soon',
     subscriptionType: 'Subscription Type',
+    billingType: 'Billing Type',
     subscriptionExpires: 'Subscription Expires',
     // Usage stat cells
     todayRequests: 'Today Requests',
@@ -272,7 +273,8 @@ export default {
       email: 'Email',
       password: 'Password',
       confirmPassword: 'Confirm Password',
-      passwordPlaceholder: 'Min 8 characters',
+      passwordPlaceholder: '8–72 bytes (UTF-8)',
+      passwordLengthError: 'Password must be 8–72 UTF-8 bytes. Non-ASCII characters may use multiple bytes.',
       confirmPasswordPlaceholder: 'Confirm password',
       passwordMismatch: 'Passwords do not match'
     },

@@ -66,6 +66,36 @@ func (s *UsageLogRepoSuite) createUsageLog(user *service.User, apiKey *service.A
 
 // --- Create / GetByID ---
 
+func (s *UsageLogRepoSuite) TestStrictTimingRoundTrip() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "strict-timing@test.com"})
+	key := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-strict-timing", Name: "timing"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "timing"})
+	first, last := 120, 920
+	textKind, compactKind := "text", "compaction"
+	for _, version := range []int{0, 1} {
+		log := &service.UsageLog{UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID,
+			RequestID: uuid.NewString(), Model: "timing-test", TimingVersion: version,
+			FirstTokenMs: &first, LastTokenMs: &last, FirstOutputKind: &textKind}
+		_, err := s.repo.Create(s.ctx, log)
+		s.Require().NoError(err)
+		stored, err := s.repo.GetByID(s.ctx, log.ID)
+		s.Require().NoError(err)
+		s.Equal(version, stored.TimingVersion)
+		s.Equal(first, *stored.FirstTokenMs)
+		s.Equal(last, *stored.LastTokenMs)
+	}
+	compact := &service.UsageLog{UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID,
+		RequestID: uuid.NewString(), Model: "timing-test", TimingVersion: 1, FirstOutputKind: &compactKind}
+	_, err := s.repo.Create(s.ctx, compact)
+	s.Require().NoError(err)
+	stored, err := s.repo.GetByID(s.ctx, compact.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(stored.FirstOutputKind)
+	s.Equal("compaction", *stored.FirstOutputKind)
+	s.Nil(stored.FirstTokenMs)
+	s.Nil(stored.LastTokenMs)
+}
+
 func (s *UsageLogRepoSuite) TestCreate() {
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "create@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-create", Name: "k"})
@@ -1577,9 +1607,30 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrend() {
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(48 * time.Hour)
 
-	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10, "tokens")
 	s.Require().NoError(err, "GetUserUsageTrend")
 	s.Require().GreaterOrEqual(len(trend), 2)
+}
+
+func (s *UsageLogRepoSuite) TestGetUserUsageTrend_SelectsTopByMetric() {
+	highTokens := mustCreateUser(s.T(), s.client, &service.User{Email: "tokens@test.com"})
+	highSpend := mustCreateUser(s.T(), s.client, &service.User{Email: "spend@test.com"})
+	tokenKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: highTokens.ID, Key: "sk-trend-tokens", Name: "tokens"})
+	spendKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: highSpend.ID, Key: "sk-trend-spend", Name: "spend"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-trend-metric"})
+	at := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(highTokens, tokenKey, account, 1000, 0, 0.1, at)
+	s.createUsageLog(highSpend, spendKey, account, 10, 0, 5, at)
+	start, end := at.Add(-time.Hour), at.Add(time.Hour)
+	tokens, err := s.repo.GetUserUsageTrend(s.ctx, start, end, "day", 1, "tokens")
+	s.Require().NoError(err)
+	s.Require().Len(tokens, 1)
+	s.Require().Equal(highTokens.ID, tokens[0].UserID)
+	spend, err := s.repo.GetUserUsageTrend(s.ctx, start, end, "day", 1, "actual_cost")
+	s.Require().NoError(err)
+	s.Require().Len(spend, 1)
+	s.Require().Equal(highSpend.ID, spend[0].UserID)
+	s.Require().Equal(5.0, spend[0].ActualCost)
 }
 
 // --- GetAPIKeyUsageTrend ---

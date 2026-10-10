@@ -324,6 +324,20 @@ func (_c *UsageLogCreate) SetNillableAudioOutputTokens(v *int) *UsageLogCreate {
 	return _c
 }
 
+// SetCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field.
+func (_c *UsageLogCreate) SetCodexRolloutBudgetUnits(v float64) *UsageLogCreate {
+	_c.mutation.SetCodexRolloutBudgetUnits(v)
+	return _c
+}
+
+// SetNillableCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableCodexRolloutBudgetUnits(v *float64) *UsageLogCreate {
+	if v != nil {
+		_c.SetCodexRolloutBudgetUnits(*v)
+	}
+	return _c
+}
+
 // SetInputCost sets the "input_cost" field.
 func (_c *UsageLogCreate) SetInputCost(v float64) *UsageLogCreate {
 	_c.mutation.SetInputCost(v)
@@ -488,6 +502,20 @@ func (_c *UsageLogCreate) SetDurationMs(v int) *UsageLogCreate {
 func (_c *UsageLogCreate) SetNillableDurationMs(v *int) *UsageLogCreate {
 	if v != nil {
 		_c.SetDurationMs(*v)
+	}
+	return _c
+}
+
+// SetTimingVersion sets the "timing_version" field.
+func (_c *UsageLogCreate) SetTimingVersion(v int) *UsageLogCreate {
+	_c.mutation.SetTimingVersion(v)
+	return _c
+}
+
+// SetNillableTimingVersion sets the "timing_version" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableTimingVersion(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetTimingVersion(*v)
 	}
 	return _c
 }
@@ -897,6 +925,10 @@ func (_c *UsageLogCreate) defaults() {
 		v := usagelog.DefaultStream
 		_c.mutation.SetStream(v)
 	}
+	if _, ok := _c.mutation.TimingVersion(); !ok {
+		v := usagelog.DefaultTimingVersion
+		_c.mutation.SetTimingVersion(v)
+	}
 	if _, ok := _c.mutation.CompletionStatus(); !ok {
 		v := usagelog.DefaultCompletionStatus
 		_c.mutation.SetCompletionStatus(v)
@@ -1030,6 +1062,9 @@ func (_c *UsageLogCreate) check() error {
 	}
 	if _, ok := _c.mutation.Stream(); !ok {
 		return &ValidationError{Name: "stream", err: errors.New(`ent: missing required field "UsageLog.stream"`)}
+	}
+	if _, ok := _c.mutation.TimingVersion(); !ok {
+		return &ValidationError{Name: "timing_version", err: errors.New(`ent: missing required field "UsageLog.timing_version"`)}
 	}
 	if v, ok := _c.mutation.FirstOutputKind(); ok {
 		if err := usagelog.FirstOutputKindValidator(v); err != nil {
@@ -1207,6 +1242,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec.SetField(usagelog.FieldAudioOutputTokens, field.TypeInt, value)
 		_node.AudioOutputTokens = value
 	}
+	if value, ok := _c.mutation.CodexRolloutBudgetUnits(); ok {
+		_spec.SetField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64, value)
+		_node.CodexRolloutBudgetUnits = &value
+	}
 	if value, ok := _c.mutation.InputCost(); ok {
 		_spec.SetField(usagelog.FieldInputCost, field.TypeFloat64, value)
 		_node.InputCost = value
@@ -1254,6 +1293,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DurationMs(); ok {
 		_spec.SetField(usagelog.FieldDurationMs, field.TypeInt, value)
 		_node.DurationMs = &value
+	}
+	if value, ok := _c.mutation.TimingVersion(); ok {
+		_spec.SetField(usagelog.FieldTimingVersion, field.TypeInt, value)
+		_node.TimingVersion = value
 	}
 	if value, ok := _c.mutation.FirstTokenMs(); ok {
 		_spec.SetField(usagelog.FieldFirstTokenMs, field.TypeInt, value)
@@ -1903,6 +1946,30 @@ func (u *UsageLogUpsert) AddAudioOutputTokens(v int) *UsageLogUpsert {
 	return u
 }
 
+// SetCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsert) SetCodexRolloutBudgetUnits(v float64) *UsageLogUpsert {
+	u.Set(usagelog.FieldCodexRolloutBudgetUnits, v)
+	return u
+}
+
+// UpdateCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateCodexRolloutBudgetUnits() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldCodexRolloutBudgetUnits)
+	return u
+}
+
+// AddCodexRolloutBudgetUnits adds v to the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsert) AddCodexRolloutBudgetUnits(v float64) *UsageLogUpsert {
+	u.Add(usagelog.FieldCodexRolloutBudgetUnits, v)
+	return u
+}
+
+// ClearCodexRolloutBudgetUnits clears the value of the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsert) ClearCodexRolloutBudgetUnits() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldCodexRolloutBudgetUnits)
+	return u
+}
+
 // SetInputCost sets the "input_cost" field.
 func (u *UsageLogUpsert) SetInputCost(v float64) *UsageLogUpsert {
 	u.Set(usagelog.FieldInputCost, v)
@@ -2116,6 +2183,24 @@ func (u *UsageLogUpsert) AddDurationMs(v int) *UsageLogUpsert {
 // ClearDurationMs clears the value of the "duration_ms" field.
 func (u *UsageLogUpsert) ClearDurationMs() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldDurationMs)
+	return u
+}
+
+// SetTimingVersion sets the "timing_version" field.
+func (u *UsageLogUpsert) SetTimingVersion(v int) *UsageLogUpsert {
+	u.Set(usagelog.FieldTimingVersion, v)
+	return u
+}
+
+// UpdateTimingVersion sets the "timing_version" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateTimingVersion() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldTimingVersion)
+	return u
+}
+
+// AddTimingVersion adds v to the "timing_version" field.
+func (u *UsageLogUpsert) AddTimingVersion(v int) *UsageLogUpsert {
+	u.Add(usagelog.FieldTimingVersion, v)
 	return u
 }
 
@@ -2995,6 +3080,34 @@ func (u *UsageLogUpsertOne) UpdateAudioOutputTokens() *UsageLogUpsertOne {
 	})
 }
 
+// SetCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsertOne) SetCodexRolloutBudgetUnits(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetCodexRolloutBudgetUnits(v)
+	})
+}
+
+// AddCodexRolloutBudgetUnits adds v to the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsertOne) AddCodexRolloutBudgetUnits(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddCodexRolloutBudgetUnits(v)
+	})
+}
+
+// UpdateCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateCodexRolloutBudgetUnits() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateCodexRolloutBudgetUnits()
+	})
+}
+
+// ClearCodexRolloutBudgetUnits clears the value of the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsertOne) ClearCodexRolloutBudgetUnits() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearCodexRolloutBudgetUnits()
+	})
+}
+
 // SetInputCost sets the "input_cost" field.
 func (u *UsageLogUpsertOne) SetInputCost(v float64) *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
@@ -3244,6 +3357,27 @@ func (u *UsageLogUpsertOne) UpdateDurationMs() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearDurationMs() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearDurationMs()
+	})
+}
+
+// SetTimingVersion sets the "timing_version" field.
+func (u *UsageLogUpsertOne) SetTimingVersion(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetTimingVersion(v)
+	})
+}
+
+// AddTimingVersion adds v to the "timing_version" field.
+func (u *UsageLogUpsertOne) AddTimingVersion(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddTimingVersion(v)
+	})
+}
+
+// UpdateTimingVersion sets the "timing_version" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateTimingVersion() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateTimingVersion()
 	})
 }
 
@@ -4347,6 +4481,34 @@ func (u *UsageLogUpsertBulk) UpdateAudioOutputTokens() *UsageLogUpsertBulk {
 	})
 }
 
+// SetCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsertBulk) SetCodexRolloutBudgetUnits(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetCodexRolloutBudgetUnits(v)
+	})
+}
+
+// AddCodexRolloutBudgetUnits adds v to the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsertBulk) AddCodexRolloutBudgetUnits(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddCodexRolloutBudgetUnits(v)
+	})
+}
+
+// UpdateCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateCodexRolloutBudgetUnits() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateCodexRolloutBudgetUnits()
+	})
+}
+
+// ClearCodexRolloutBudgetUnits clears the value of the "codex_rollout_budget_units" field.
+func (u *UsageLogUpsertBulk) ClearCodexRolloutBudgetUnits() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearCodexRolloutBudgetUnits()
+	})
+}
+
 // SetInputCost sets the "input_cost" field.
 func (u *UsageLogUpsertBulk) SetInputCost(v float64) *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
@@ -4596,6 +4758,27 @@ func (u *UsageLogUpsertBulk) UpdateDurationMs() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearDurationMs() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearDurationMs()
+	})
+}
+
+// SetTimingVersion sets the "timing_version" field.
+func (u *UsageLogUpsertBulk) SetTimingVersion(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetTimingVersion(v)
+	})
+}
+
+// AddTimingVersion adds v to the "timing_version" field.
+func (u *UsageLogUpsertBulk) AddTimingVersion(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddTimingVersion(v)
+	})
+}
+
+// UpdateTimingVersion sets the "timing_version" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateTimingVersion() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateTimingVersion()
 	})
 }
 

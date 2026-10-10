@@ -1,6 +1,9 @@
 package service
 
-import "time"
+import (
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
+	"time"
+)
 
 // APIKeyAuthSnapshot API Key 认证缓存快照（仅包含认证所需字段）
 type APIKeyAuthSnapshot struct {
@@ -43,6 +46,7 @@ type APIKeyAuthActorSnapshot struct {
 }
 
 type APIKeyAuthTeamSnapshot struct {
+	TeamWallet
 	ID     int64  `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -101,6 +105,7 @@ type APIKeyAuthGroupSnapshot struct {
 	VideoPrice720P                  *float64                      `json:"video_price_720p,omitempty"`
 	VideoPrice1080P                 *float64                      `json:"video_price_1080p,omitempty"`
 	VideoModelPrices                map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	VideoModels                     videoprotocol.Models          `json:"video_models"`
 	WebSearchPricePerCall           *float64                      `json:"web_search_price_per_call,omitempty"`
 	SearchPricePer1k                *float64                      `json:"search_price_per_1k,omitempty"`
 	AudioRealtimePricePerMin        *float64                      `json:"audio_realtime_price_per_min,omitempty"`
@@ -128,12 +133,15 @@ type APIKeyAuthGroupSnapshot struct {
 	FreeOpenAIFast              bool                              `json:"free_openai_fast"`
 	DefaultMappedModel          string                            `json:"default_mapped_model,omitempty"`
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config,omitempty"`
-	ModelsListConfig            GroupModelsListConfig             `json:"models_list_config,omitempty"`
+	ModelAllowlist              GroupModelAllowlist               `json:"model_allowlist,omitempty"`
+	// CodexModelsManifestConfig 与 ModelAllowlist 一样在认证快照分组里透传，
+	// Codex /models handler 直接读认证分组对象。
+	CodexModelsManifestConfig GroupCodexModelsManifestConfig `json:"codex_models_manifest_config,omitempty"`
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 级联判断。
 	RPMLimit int `json:"rpm_limit"`
 
-	// MaxReasoningEffort OpenAI/Codex 请求的推理强度上限，空字符串表示不限制。
+	// MaxReasoningEffort Anthropic/OpenAI 请求的推理强度上限，空字符串表示不限制。
 	MaxReasoningEffort string `json:"max_reasoning_effort,omitempty"`
 	// MaxReasoningEffortOverLimit 超过上限时的访问控制：downgrade（默认）或 deny。
 	MaxReasoningEffortOverLimit string `json:"max_reasoning_effort_over_limit,omitempty"`

@@ -1,6 +1,6 @@
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   createAccountMock,
@@ -9,6 +9,9 @@ const {
   importCodexSessionMock,
   createOpenAICodexPATMock,
   authIsSimpleMode,
+  cnOAuthRequestMock,
+  cnOAuthModelsMock,
+  previewModelsMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   syncUpstreamModelsMock: vi.fn(),
@@ -16,13 +19,19 @@ const {
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   authIsSimpleMode: { value: true },
+  cnOAuthRequestMock: vi.fn(),
+  cnOAuthModelsMock: vi.fn(),
+  previewModelsMock: vi.fn(),
 }))
+
+vi.mock('@/components/account/OutboundIdentityEditor.vue', () => ({ default: { template: '<div />' } }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError: vi.fn(),
     showSuccess: vi.fn(),
     showWarning: showWarningMock,
+    showInfo: vi.fn(),
   }),
 }))
 
@@ -55,7 +64,9 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn().mockResolvedValue([]),
+  accountsAPI: { syncUpstreamModelsPreview: previewModelsMock },
 }))
+vi.mock('@/api/admin/cnOAuth', () => ({ cnOAuthRequest: cnOAuthRequestMock, cnOAuthModels: cnOAuthModelsMock }))
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -151,7 +162,7 @@ const ModelWhitelistSelectorStub = defineComponent({
   >models</button>`,
 })
 
-function mountModal(groups: any[] = []) {
+function mountModal(groups: any[] = [], realModelSelector = false) {
   return mount(CreateAccountModal, {
     props: { show: true, proxies: [], groups },
     global: {
@@ -165,7 +176,7 @@ function mountModal(groups: any[] = []) {
         ProxySelector: true,
         ProxyAdBanner: true,
         GroupSelector: GroupSelectorStub,
-        ModelWhitelistSelector: ModelWhitelistSelectorStub,
+        ModelWhitelistSelector: realModelSelector ? false : ModelWhitelistSelectorStub,
         QuotaLimitCard: true,
       },
     },
@@ -223,6 +234,117 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    cnOAuthRequestMock.mockReset()
+    cnOAuthModelsMock.mockReset()
+    previewModelsMock.mockReset()
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('shows StepFun model choices and restores them before entering credentials', async () => {
+    const wrapper = mountModal([], true)
+    await selectButtonByText(wrapper, 'StepFun')
+    const candidates = ['step-5-preview', 'step-3.7-flash', 'step-3.5-flash-2603', 'step-3.5-flash', 'step-router-v1']
+    const selector = wrapper.findComponent({ name: 'ModelWhitelistSelector' })
+    expect(selector.props('modelValue')).toEqual(candidates)
+    await selectButtonByText(wrapper, 'admin.accounts.clearAllModels')
+    expect(selector.props('modelValue')).toEqual([])
+    await selectButtonByText(wrapper, 'admin.accounts.fillRelatedModels')
+    expect(selector.props('modelValue')).toEqual(candidates)
+    await wrapper.get('div.cursor-pointer').trigger('click')
+    expect(wrapper.findAll('[data-testid="select-model"] > span.truncate').map(label => label.text())).toEqual(candidates)
+    expect(previewModelsMock).not.toHaveBeenCalled()
+    expect(cnOAuthModelsMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each(['apikey', 'oauth'] as const)('saves the actual StepFun %s checkbox selection during creation', async kind => {
+    const wrapper = mountModal([], true)
+    await selectButtonByText(wrapper, 'StepFun')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Restricted StepFun')
+    // Start with an empty whitelist, then explicitly select from the live catalog.
+    await selectButtonByText(wrapper, 'admin.accounts.clearAllModels')
+    const catalog = { models: ['step-3.7-flash', 'step-other-chat'] }
+    if (kind === 'apikey') {
+      previewModelsMock.mockResolvedValue(catalog)
+      await wrapper.get('form#create-account-form input[type="password"]').setValue('step-key')
+    } else {
+      const pending = { session_id: 'ready-step', status: 'pending', authorize_url: 'https://platform.stepfun.com/cli-login', expires_at: new Date(Date.now() + 60000).toISOString(), interval_seconds: 5 }
+      cnOAuthRequestMock.mockResolvedValueOnce(pending)
+      await selectButtonByText(wrapper, 'admin.accounts.oauth.domestic.start')
+      await flushPromises()
+      await wrapper.get('[data-testid="cn-oauth-panel"] textarea').setValue('http://127.0.0.1:53683/callback?state=s&api_key=private-key')
+      cnOAuthRequestMock.mockResolvedValueOnce({ ...pending, status: 'ready' })
+      await selectButtonByText(wrapper, 'admin.accounts.oauth.domestic.exchange')
+      await flushPromises()
+      expect(cnOAuthRequestMock).toHaveBeenLastCalledWith('stepfun', 'exchange', {
+        session_id: 'ready-step', callback: 'http://127.0.0.1:53683/callback?state=s&api_key=private-key'
+      })
+      expect(wrapper.findComponent({ name: 'CNOAuthPanel' }).emitted('ready-session')?.at(-1)).toEqual(['ready-step'])
+      expect(wrapper.findComponent({ name: 'ModelWhitelistSelector' }).props('oauthSessionId')).toBe('ready-step')
+      cnOAuthModelsMock.mockResolvedValue(catalog)
+      cnOAuthRequestMock.mockResolvedValueOnce({ ...pending, status: 'completed', account_id: 42 })
+    }
+    await selectButtonByText(wrapper, 'admin.accounts.syncUpstreamModels')
+    await flushPromises()
+    await wrapper.get('div.cursor-pointer').trigger('click')
+    const other = wrapper.findAll('[data-testid="model-option"]').find(row => row.text().includes('step-other-chat'))!
+    await other.get('[data-testid="select-model"]').trigger('click')
+    if (kind === 'apikey') {
+      await wrapper.get('form#create-account-form').trigger('submit.prevent')
+      await flushPromises()
+      expect(previewModelsMock).toHaveBeenCalledWith(expect.objectContaining({ platform: 'stepfun', api_key: 'step-key', base_url: 'https://api.stepfun.com/v1' }))
+      expect(createAccountMock.mock.calls[0][0].credentials.model_mapping).toEqual({ 'step-3.7-flash': 'step-3.7-flash' })
+    } else {
+      await selectButtonByText(wrapper, 'admin.accounts.oauth.domestic.create')
+      await flushPromises()
+      expect(cnOAuthModelsMock).toHaveBeenCalledWith('ready-step')
+      expect(cnOAuthRequestMock).toHaveBeenLastCalledWith('stepfun', 'complete', expect.objectContaining({ session_id: 'ready-step', model_mapping: { 'step-3.7-flash': 'step-3.7-flash' } }))
+      expect(createAccountMock).not.toHaveBeenCalled()
+    }
+    wrapper.unmount()
+  })
+
+  it('sets month and year expiry presets without submitting the account form', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-01-31T12:34:00'))
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('expiry account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    const input = wrapper.get<HTMLInputElement>('input[type="datetime-local"]')
+
+    for (const [label, expected] of [
+      ['payment.oneMonth', '2026-02-28T12:34'],
+      ['payment.oneYear', '2027-01-31T12:34'],
+    ]) {
+      const button = wrapper.findAll('button').find((candidate) => candidate.text() === label)!
+      expect(button.attributes('type')).toBe('button')
+      await button.trigger('click')
+      expect(input.element.value).toBe(expected)
+      expect(createAccountMock).not.toHaveBeenCalled()
+    }
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock.mock.calls[0]?.[0]?.expires_at).toBe(new Date('2027-01-31T12:34:00').getTime() / 1000)
+    wrapper.unmount()
+  })
+
+  it('allows a manually entered expiry to override a preset before account creation', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('custom expiry account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await selectButtonByText(wrapper, 'payment.oneMonth')
+    await wrapper.get('input[type="datetime-local"]').setValue('2030-04-15T09:20')
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock.mock.calls[0]?.[0]?.expires_at).toBe(new Date('2030-04-15T09:20:00').getTime() / 1000)
+    wrapper.unmount()
   })
 
   it('hides only the redundant account toggle when every selected group enables tier pricing', async () => {
@@ -259,6 +381,48 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.codex_fingerprint_mode).toBeUndefined()
+  })
+
+  it('omits the upstream request id header from extra when left empty', async () => {
+    await submitApiKeyAccount('openai')
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra).not.toHaveProperty('upstream_request_id_header')
+  })
+
+  it('sends the trimmed upstream request id header in extra when filled', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('openai account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="upstream-request-id-header"]').setValue('  X-Oneapi-Request-Id  ')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.upstream_request_id_header).toBe('X-Oneapi-Request-Id')
+  })
+
+  it('omits images_url_to_b64_json from extra by default', async () => {
+    await submitApiKeyAccount('openai')
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra).not.toHaveProperty('images_url_to_b64_json')
+  })
+
+  it('sends images_url_to_b64_json in extra when the toggle is enabled', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('openai account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="openai-images-url-to-b64-json-toggle"]').trigger('click')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.images_url_to_b64_json).toBe(true)
   })
 
   it('persists upstream model metadata after creating an account from preview', async () => {
@@ -344,6 +508,65 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
 
 
+  it('submits OpenCode Zen default protocol rules with adaptive endpoints', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenCode')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('oc')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-opencode-zen')
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      account_mode: 'zen',
+      api_protocol: 'adaptive',
+      base_url: 'https://opencode.ai/zen/v1',
+      api_base_urls: {
+        chat_completions: 'https://opencode.ai/zen/v1',
+        anthropic: 'https://opencode.ai/zen',
+        responses: 'https://opencode.ai/zen/v1'
+      },
+      protocol_rules: [
+        { pattern: 'grok-*', protocol: 'responses' },
+        { pattern: 'gpt-*', protocol: 'responses' },
+        { pattern: 'muse-spark-*', protocol: 'responses' },
+        { pattern: 'claude-*', protocol: 'anthropic' },
+        { pattern: 'qwen*', protocol: 'anthropic' }
+      ]
+    })
+  })
+
+  it('submits OpenCode GO endpoints after switching account type', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenCode')
+    await selectButtonByText(wrapper, 'admin.accounts.opencodeGo.accountMode.go')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('oc-go')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-opencode-go')
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      account_mode: 'go',
+      api_protocol: 'adaptive',
+      base_url: 'https://opencode.ai/zen/go/v1',
+      api_base_urls: {
+        chat_completions: 'https://opencode.ai/zen/go/v1',
+        anthropic: 'https://opencode.ai/zen/go',
+        responses: 'https://opencode.ai/zen/go/v1'
+      },
+      protocol_rules: [
+        { pattern: 'grok-*', protocol: 'responses' },
+        { pattern: 'gpt-*', protocol: 'responses' },
+        { pattern: 'muse-spark-*', protocol: 'responses' },
+        { pattern: 'minimax-*', protocol: 'anthropic' },
+        { pattern: 'qwen*', protocol: 'anthropic' }
+      ]
+    })
+  })
+
   it('submits adaptive Kimi protocol endpoints', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Kimi')
@@ -366,6 +589,29 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     })
   })
 
+  it('saves StepFun international Step Plan as Chat Completions after changing mode', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'StepFun')
+    const presets = wrapper.findComponent({ name: 'CnBaseUrlPresets' })
+    expect(presets.exists()).toBe(true)
+    presets.vm.$emit('select', { mode: 'payg', protocol: 'chat_completions', url: 'https://api.stepfun.ai/v1' })
+    await flushPromises()
+    await selectButtonByText(wrapper, 'admin.accounts.cnProviders.accountMode.coding')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Step Plan Intl')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('step-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0][0]).toMatchObject({
+      platform: 'stepfun', type: 'apikey', credentials: {
+        region: 'global', api_key: 'step-key', account_mode: 'coding',
+        api_protocol: 'chat_completions', base_url: 'https://api.stepfun.ai/step_plan/v1'
+      }
+    })
+    expect(createAccountMock.mock.calls[0][0].credentials.api_base_urls).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('submits adaptive Kimi Coding Plan Responses endpoint', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Kimi')
@@ -385,6 +631,28 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
         chat_completions: 'https://api.kimi.com/coding/v1',
         anthropic: 'https://api.kimi.com/coding',
         responses: 'https://api.kimi.com/coding/v1'
+      }
+    })
+  })
+
+  it('submits adaptive MiniMax protocol endpoints', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'MiniMax')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('MiniMax adaptive')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-minimax')
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      account_mode: 'payg',
+      api_protocol: 'adaptive',
+      base_url: 'https://api.minimaxi.com/v1',
+      api_base_urls: {
+        chat_completions: 'https://api.minimaxi.com/v1',
+        anthropic: 'https://api.minimaxi.com/anthropic',
+        responses: 'https://api.minimaxi.com/v1'
       }
     })
   })

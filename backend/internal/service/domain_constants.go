@@ -24,7 +24,6 @@ const (
 
 // Affiliate rebate settings
 const (
-	AffiliateRebateRateDefault          = 20.0
 	AffiliateRebateRateMin              = 0.0
 	AffiliateRebateRateMax              = 100.0
 	AffiliateEnabledDefault             = false // 邀请返利总开关默认关闭
@@ -44,10 +43,15 @@ const (
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
 	// 国产 OpenAI 兼容供应商（与 grok 一样经 OpenAI 网关转发）。
-	PlatformKimi      = domain.PlatformKimi
-	PlatformZhipu     = domain.PlatformZhipu
-	PlatformDeepseek  = domain.PlatformDeepseek
-	PlatformComposite = domain.PlatformComposite
+	PlatformKimi       = domain.PlatformKimi
+	PlatformZhipu      = domain.PlatformZhipu
+	PlatformDeepseek   = domain.PlatformDeepseek
+	PlatformStepFun    = domain.PlatformStepFun
+	PlatformMiniMax    = domain.PlatformMiniMax
+	PlatformTypeSafe   = domain.PlatformTypeSafe
+	PlatformOpenCodeGo = domain.PlatformOpenCodeGo
+	PlatformVideo      = domain.PlatformVideo
+	PlatformComposite  = domain.PlatformComposite
 	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
 	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
 	PlatformKiro = "kiro"
@@ -57,6 +61,8 @@ const (
 const (
 	AccountModePayG   = domain.AccountModePayG
 	AccountModeCoding = domain.AccountModeCoding
+	AccountModeZen    = domain.AccountModeZen
+	AccountModeGo     = domain.AccountModeGo
 )
 
 // 上游 API 协议（国产供应商）：决定转发端点与格式，与接入模式正交。
@@ -74,7 +80,16 @@ const (
 	DefaultKimiCodingBaseURL  = "https://api.kimi.com/coding/v1"
 	DefaultZhipuPayGBaseURL   = "https://open.bigmodel.cn/api/paas/v4"
 	DefaultZhipuCodingBaseURL = "https://open.bigmodel.cn/api/coding/paas/v4"
-	DefaultDeepseekBaseURL    = "https://api.deepseek.com"
+	// Z.ai 是智谱 GLM 的国际站，端点布局与国内站同构但域名不同。账户绑定流程会
+	// 显式写入这些地址，因此不需要为它们再引入一套平台默认值。
+	DefaultZaiCodingBaseURL = "https://api.z.ai/api/coding/paas/v4"
+	DefaultDeepseekBaseURL  = "https://api.deepseek.com"
+	// MiniMax 按量付费与 Coding/Token Plan 共用推理域名，靠 API Key 区分套餐。
+	DefaultMiniMaxBaseURL = "https://api.minimaxi.com/v1"
+	// OpenCode Go：Chat Completions / Responses / models 共用 /v1 基址。
+	DefaultOpenCodeGoBaseURL = "https://opencode.ai/zen/go/v1"
+	// OpenCode Zen：按量付费网关，模型列表为 /zen/v1/models。
+	DefaultOpenCodeZenBaseURL = "https://opencode.ai/zen/v1"
 )
 
 // 国产供应商 Anthropic 协议端点的默认 base_url（上游路径为 {base}/v1/messages）。
@@ -83,17 +98,33 @@ const (
 	DefaultKimiPayGAnthropicBaseURL   = "https://api.moonshot.cn/anthropic"
 	DefaultKimiCodingAnthropicBaseURL = "https://api.kimi.com/coding"
 	DefaultZhipuAnthropicBaseURL      = "https://open.bigmodel.cn/api/anthropic"
+	DefaultZaiAnthropicBaseURL        = "https://api.z.ai/api/anthropic"
 	DefaultDeepseekAnthropicBaseURL   = "https://api.deepseek.com/anthropic"
+	DefaultMiniMaxAnthropicBaseURL    = "https://api.minimaxi.com/anthropic"
+	// OpenCode Go Anthropic 基址不含 /v1：nativeAnthropicTargetURL 会再拼 /v1/messages。
+	DefaultOpenCodeGoAnthropicBaseURL  = "https://opencode.ai/zen/go"
+	DefaultOpenCodeZenAnthropicBaseURL = "https://opencode.ai/zen"
 )
 
-// IsCNProvider 报告 platform 是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）。
+// IsCNProvider 报告 platform 是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
 func IsCNProvider(platform string) bool {
 	switch platform {
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformStepFun:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsOpenCodeGo 报告 platform 是否为 OpenCode Go 订阅网关。
+func IsOpenCodeGo(platform string) bool {
+	return platform == PlatformOpenCodeGo
+}
+
+// IsMultiProtocolAPIKeyProvider 报告 platform 是否为多协议 API Key 网关
+// （国产供应商 + OpenCode）：走 OpenAI 网关、支持 adaptive 协议分流。
+func IsMultiProtocolAPIKeyProvider(platform string) bool {
+	return IsCNProvider(platform) || platform == PlatformOpenCodeGo
 }
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -108,17 +139,23 @@ var AllowedQuotaPlatforms = []string{
 	PlatformKimi,
 	PlatformZhipu,
 	PlatformDeepseek,
+	PlatformMiniMax,
+	PlatformStepFun,
+	PlatformOpenCodeGo,
+	PlatformTypeSafe,
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
-// openai/anthropic/grok 有原生用量窗口；kimi/zhipu 的 Coding Plan 同样暴露 5h/weekly
-// 滚动窗口，纳入阈值评估。deepseek 为余额型，走余额检测而非阈值。
+// openai/anthropic/grok 有原生用量窗口；kimi/zhipu/minimax 的 Coding Plan 同样暴露
+// 5h/weekly 滚动窗口，纳入阈值评估。deepseek 为余额型，走余额检测而非阈值。
 var AllowedSchedulingThresholdPlatforms = []string{
 	PlatformOpenAI,
 	PlatformAnthropic,
 	PlatformGrok,
 	PlatformKimi,
 	PlatformZhipu,
+	PlatformMiniMax,
+	PlatformOpenCodeGo,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。
@@ -198,11 +235,13 @@ const (
 	// 白名单非空时，是否放行非白名单域名按主域名限量注册（每域名 1 个账户）。
 	// 默认 false：非白名单域名直接拒绝（白名单严格模式）。
 	SettingKeyRegistrationEmailDomainQuotaEnabled      = "registration_email_domain_quota_enabled"
-	SettingKeyPromoCodeEnabled                         = "promo_code_enabled"               // 是否启用优惠码功能
-	SettingKeyPasswordResetEnabled                     = "password_reset_enabled"           // 是否启用忘记密码功能（需要先开启邮件验证）
-	SettingKeyFrontendURL                              = "frontend_url"                     // 前端基础URL，用于生成邮件中的重置密码链接
-	SettingKeyInvitationCodeEnabled                    = "invitation_code_enabled"          // 是否启用邀请码注册
-	SettingKeyAffiliateEnabled                         = "affiliate_enabled"                // 邀请返利功能总开关
+	SettingKeyPromoCodeEnabled                         = "promo_code_enabled"      // 是否启用优惠码功能
+	SettingKeyPasswordResetEnabled                     = "password_reset_enabled"  // 是否开启忘记密码功能（需要先开启邮件验证）
+	SettingKeyFrontendURL                              = "frontend_url"            // 前端基础URL，用于生成邮件中的重置密码链接
+	SettingKeyInvitationCodeEnabled                    = "invitation_code_enabled" // 是否开启邀请码注册
+	SettingKeyAffiliateEnabled                         = "affiliate_enabled"       // 邀请返利功能总开关
+	SettingKeyAffiliateRebateRateL2                    = "affiliate_rebate_rate_l2"
+	SettingKeyAffiliateRebateRateL3                    = "affiliate_rebate_rate_l3"
 	SettingKeyAffiliateRebateRate                      = "affiliate_rebate_rate"            // 邀请返利比例（百分比，0-100）
 	SettingKeyAffiliateRebateFreezeHours               = "affiliate_rebate_freeze_hours"    // 返利冻结期（小时，0=不冻结）
 	SettingKeyAffiliateRebateDurationDays              = "affiliate_rebate_duration_days"   // 返利有效期（天，0=永久）
@@ -216,13 +255,16 @@ const (
 	// 且即使 IP 页 enforcement_enabled 已开也不拦截。勿与 SettingKeyIPAccessControlEnabled
 	// （即 enforcement_enabled 的存盘名）混淆。
 	SettingKeyGlobalIPAccessControlEnabled = "global_ip_access_control_enabled"
-	SettingKeyContentModerationConfig      = "content_moderation_config"       // 内容审计配置（JSON）
-	SettingKeyCyberSessionBlockEnabled     = "cyber_session_block_enabled"     // cyber 命中后会话级自动屏蔽总开关(默认关)
-	SettingKeyCyberSessionBlockTTLSeconds  = "cyber_session_block_ttl_seconds" // 会话屏蔽 TTL 秒数(默认 3600)
-	SettingKeyLoginAgreementEnabled        = "login_agreement_enabled"         // 登录前是否要求同意条款
-	SettingKeyLoginAgreementMode           = "login_agreement_mode"            // 条款确认展示模式：modal / checkbox
-	SettingKeyLoginAgreementUpdatedAt      = "login_agreement_updated_at"      // 条款更新日期（展示用）
-	SettingKeyLoginAgreementDocuments      = "login_agreement_documents"       // 条款文档列表（JSON，Markdown 内容）
+	SettingKeyContentModerationConfig      = "content_moderation_config"   // 内容审计配置（JSON）
+	SettingKeyCyberSessionBlockEnabled     = "cyber_session_block_enabled" // cyber 命中后会话级自动屏蔽总开关(默认关)
+	// SettingKeyCyberPolicyUserAllowlist 为 Platform user ID 列表；命中的用户按 log-only
+	// 处理 cyber 命中，不进入硬阻断链路。Plus 侧仍保留 session_block/shadow 动作语义。
+	SettingKeyCyberPolicyUserAllowlist    = "cyber_policy_user_allowlist"     // Platform user IDs with log-only cyber handling
+	SettingKeyCyberSessionBlockTTLSeconds = "cyber_session_block_ttl_seconds" // 会话屏蔽 TTL 秒数(默认 3600)
+	SettingKeyLoginAgreementEnabled       = "login_agreement_enabled"         // 登录前是否要求同意条款
+	SettingKeyLoginAgreementMode          = "login_agreement_mode"            // 条款确认展示模式：modal / checkbox
+	SettingKeyLoginAgreementUpdatedAt     = "login_agreement_updated_at"      // 条款更新日期（展示用）
+	SettingKeyLoginAgreementDocuments     = "login_agreement_documents"       // 条款文档列表（JSON，Markdown 内容）
 
 	// 邮件服务设置
 	SettingKeySMTPHost     = "smtp_host"      // SMTP服务器地址
@@ -475,6 +517,7 @@ const (
 	// ChannelMonitorModeV1/V2 are the only accepted mode values.
 	ChannelMonitorModeV1 = "v1"
 	ChannelMonitorModeV2 = "v2"
+	ChannelMonitorModeV3 = "v3"
 
 	// SettingKeyChannelMonitorDefaultIntervalSeconds controls the default interval (seconds)
 	// pre-filled when creating a new channel monitor from the admin UI. Range: [15, 3600].
@@ -492,6 +535,10 @@ const (
 	// fail-closed (only the literal "true" enables it). Admin endpoints always
 	// keep the full snapshots regardless of this flag.
 	SettingKeyChannelMonitorShowQuota = "channel_monitor_show_quota"
+	// SettingKeyChannelMonitorHideUserRanking hides the user ranking tab and
+	// /users payload from non-admin channel-monitor v2 viewers.
+	// Default false (keep the current ranking tab). Admin endpoints always keep it.
+	SettingKeyChannelMonitorHideUserRanking = "channel_monitor_hide_user_ranking"
 
 	// SettingKeyGrokDefaultTextModel is the fallback Grok text model for empty
 	// request models and built-in Grok aliases (e.g. "grok" → this id). Default grok-4.5.
@@ -510,6 +557,15 @@ const (
 	// user-facing aggregate view. When false: user endpoint returns an empty list and the
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
+
+	// SettingKeySubscriptionEnabled is a DB-backed soft switch for the user-facing
+	// subscription surface: sidebar entries, purchase-page subscription tab, header
+	// progress badge, usage billing-type filter and the /subscriptions route. When
+	// false users can no longer buy or browse subscriptions from the UI; the
+	// subscriptions API, existing subscription billing and admin subscription
+	// management are unaffected. Together with BALANCE_PAYMENT_DISABLED it forms the
+	// admin "site billing mode" selector. Defaults to true (opt-out feature).
+	SettingKeySubscriptionEnabled = "subscription_enabled"
 
 	// SettingKeyModelPlazaEnabled is a DB-backed soft switch for the Model Plaza page
 	// (public group/model pricing showcase). When false: the plaza endpoint returns 404
@@ -531,6 +587,9 @@ const (
 
 	// SettingKeyOllamaCloudUsageSettings stores the opt-in global runner switch and interval.
 	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
+
+	// SettingKeyOpenCodeGoUsageSettings stores the opt-in global runner switch and interval.
+	SettingKeyOpenCodeGoUsageSettings = "opencode_go_usage_settings"
 
 	// =========================
 	// Overload Cooldown (529)
@@ -620,10 +679,6 @@ const (
 	SettingKeyBackendModeEnabled = "backend_mode_enabled"
 
 	// Gateway Forwarding Behavior
-	// SettingKeyOpenAITTFTMode 控制 first_token_ms 的统计口径。
-	SettingKeyOpenAITTFTMode = "openai_ttft_mode"
-	OpenAITTFTModeSemantic   = "semantic"
-	OpenAITTFTModeVisible    = "visible"
 	// SettingKeyEnableFingerprintUnification 是否统一 OAuth 账号的 X-Stainless-* 指纹头（默认 true）
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）
@@ -655,6 +710,15 @@ const (
 	// 当客户端 UA 被识别为浏览器（Chrome/Firefox/Safari/Edge 等）时，转发给 OpenAI 上游前会替换为此值，
 	// 用于避免 Cloudflare 对浏览器型 UA 的质询拦截。
 	SettingKeyOpenAICodexUserAgent = "openai_codex_user_agent"
+	// SettingKeyOpenAICodexEnvironmentTimezone 模型可见 environment_context 的
+	// 目标 IANA 时区（全局默认；账号级 extra 优先）。空值 = 功能关闭，不改写。
+	SettingKeyOpenAICodexEnvironmentTimezone = "openai_codex_environment_timezone"
+	// SettingKeyOpenAICodexEgressCountry 出口国家代码（ISO 3166-1 alpha-2，
+	// 全局默认；账号级 extra 优先）。空值 = 不声明。
+	SettingKeyOpenAICodexEgressCountry = "openai_codex_egress_country"
+	// SettingKeyOpenAICodexResidency 全局 Codex residency（off / us）。
+	// 仅 us 时出站附加 x-openai-internal-codex-residency。无账号级覆盖。
+	SettingKeyOpenAICodexResidency = "codex_residency"
 	// SettingKeyCodexLegacyClientProfileCompatibilityEnabled temporarily allows
 	// only the reviewed historical Codex wire identities. It is disabled by
 	// default and never changes their status to an official profile.
@@ -678,6 +742,15 @@ const (
 	SettingKeyOpenAICodexClientVersionSyncError = "openai_codex_client_version_sync_error"
 	// SettingKeyOpenAICodexVersionAutoSyncEnabled 是否启用 Codex 客户端版本号自动同步（默认 true）。
 	SettingKeyOpenAICodexVersionAutoSyncEnabled = "openai_codex_version_auto_sync_enabled"
+	// SettingKeyClaudeCodeClientVersion 网关对 Anthropic 上游声明的 Claude Code CLI 客户端版本号（管理员覆写）。
+	// 空值表示跟随自动同步值；自动同步也没有结果时回退到 claude.CLIVersion()（环境变量覆盖 + 内置基线）。
+	// 版本太旧会被 Anthropic 拒绝（claude_code_version_too_old），故该值需保持跟随官方发布。
+	SettingKeyClaudeCodeClientVersion = "claude_code_client_version"
+	// SettingKeyClaudeCodeClientVersionSynced 自动同步任务写入的官方 Claude Code CLI 最新版本号。
+	// 由同步任务独占写入，面板只读展示；管理员覆写请用 SettingKeyClaudeCodeClientVersion。
+	SettingKeyClaudeCodeClientVersionSynced = "claude_code_client_version_synced"
+	// SettingKeyClaudeCodeVersionAutoSyncEnabled 是否启用 Claude Code 客户端版本号自动同步（默认 true）。
+	SettingKeyClaudeCodeVersionAutoSyncEnabled = "claude_code_version_auto_sync_enabled"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。
 	SettingKeyOpenAIAllowClaudeCodeCodexPlugin = "openai_allow_claude_code_codex_plugin"

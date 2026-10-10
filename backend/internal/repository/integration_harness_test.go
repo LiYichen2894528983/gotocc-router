@@ -35,9 +35,10 @@ const (
 )
 
 var (
-	integrationDB        *sql.DB
-	integrationEntClient *dbent.Client
-	integrationRedis     *redisclient.Client
+	integrationDB          *sql.DB
+	integrationEntClient   *dbent.Client
+	integrationRedis       *redisclient.Client
+	integrationPostgresDSN string
 
 	redisNamespaceSeq uint64
 )
@@ -99,6 +100,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	integrationPostgresDSN = dsn
 	integrationDB, err = openSQLWithRetry(ctx, dsn, 30*time.Second)
 	if err != nil {
 		log.Printf("failed to open sql db: %v", err)
@@ -148,6 +150,7 @@ func TestMain(m *testing.M) {
 // integration tests apply migrations and create persistent fixture rows.
 func runIntegrationTestsWithExternalServices(ctx context.Context, m *testing.M, postgresDSN, redisAddr, redisPassword string) int {
 	var err error
+	integrationPostgresDSN = postgresDSN
 	integrationDB, err = openSQLWithRetry(ctx, postgresDSN, 30*time.Second)
 	if err != nil {
 		log.Printf("failed to open external integration postgres: %v", err)
@@ -255,6 +258,18 @@ func testEntClient(t *testing.T) *dbent.Client {
 
 // testEntTx 返回一个 ent 事务，用于需要事务隔离的测试。
 // 测试结束后会自动回滚，不会影响数据库状态。
+// truncateIntegrationTables clears the given application tables (RESTART IDENTITY
+// CASCADE) so a suite starts from a clean dataset, removing committed rows leaked
+// by async writers / committed-setup suites that bypass per-test tx rollback.
+func truncateIntegrationTables(t *testing.T, tables ...string) {
+	t.Helper()
+	if len(tables) == 0 {
+		return
+	}
+	_, err := integrationDB.ExecContext(context.Background(), "TRUNCATE "+strings.Join(tables, ", ")+" RESTART IDENTITY CASCADE")
+	require.NoError(t, err, "truncate integration tables")
+}
+
 func testEntTx(t *testing.T) *dbent.Tx {
 	t.Helper()
 

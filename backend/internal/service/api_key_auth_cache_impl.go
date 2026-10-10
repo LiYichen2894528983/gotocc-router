@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 24 // v24 adds the explicit API key routing mode.
+const apiKeyAuthSnapshotVersion = 29 // v29: independent team wallet snapshots
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -321,47 +321,6 @@ func (s *APIKeyService) lookupAPIKeyForAuth(ctx context.Context, key string) (*A
 	return s.hydrateTeamAPIKey(ctx, apiKey, err)
 }
 
-func (s *APIKeyService) hydrateTeamAPIKey(ctx context.Context, apiKey *APIKey, err error) (*APIKey, error) {
-	if err != nil || apiKey == nil || apiKey.TeamID == nil {
-		return apiKey, err
-	}
-	if !apiKey.IsActive() && apiKey.Status != StatusAPIKeyExpired && apiKey.Status != StatusAPIKeyQuotaExhausted {
-		return apiKey, nil
-	}
-	if s.cfg != nil && !s.cfg.Team.Enabled {
-		return nil, ErrTeamFeatureDisabled
-	}
-	if s.teamRepo == nil {
-		return nil, ErrTeamFeatureDisabled
-	}
-	teamCtx, err := s.teamRepo.GetContextByUserID(ctx, apiKey.UserID)
-	if err != nil {
-		if errors.Is(err, ErrTeamNotFound) {
-			return nil, ErrTeamMembershipRequired
-		}
-		return nil, err
-	}
-	if teamCtx == nil || teamCtx.Team == nil || teamCtx.Owner == nil || teamCtx.Membership == nil || teamCtx.Team.ID != *apiKey.TeamID {
-		return nil, ErrTeamMembershipRequired
-	}
-	if teamCtx.Membership.JoinedAt.After(apiKey.CreatedAt) {
-		return nil, ErrTeamMembershipRequired
-	}
-	actor, err := s.userRepo.GetByID(ctx, apiKey.UserID)
-	if err != nil {
-		return nil, err
-	}
-	owner, err := s.userRepo.GetByID(ctx, teamCtx.Owner.UserID)
-	if err != nil {
-		return nil, err
-	}
-	apiKey.ActorUser = actor
-	apiKey.User = owner
-	apiKey.Team = teamCtx.Team
-	apiKey.TeamMembership = teamCtx.Membership
-	return apiKey, nil
-}
-
 func (s *APIKeyService) applyAuthCacheEntry(key string, entry *APIKeyAuthCacheEntry) (*APIKey, bool, error) {
 	if entry == nil {
 		return nil, false, nil
@@ -423,7 +382,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		snapshot.ActorUser = &APIKeyAuthActorSnapshot{ID: apiKey.ActorUser.ID, Status: apiKey.ActorUser.Status, Email: apiKey.ActorUser.Email, Username: apiKey.ActorUser.Username}
 	}
 	if apiKey.Team != nil {
-		snapshot.Team = &APIKeyAuthTeamSnapshot{ID: apiKey.Team.ID, Name: apiKey.Team.Name, Status: apiKey.Team.Status}
+		snapshot.Team = &APIKeyAuthTeamSnapshot{TeamWallet: apiKey.Team.TeamWallet, ID: apiKey.Team.ID, Name: apiKey.Team.Name, Status: apiKey.Team.Status}
 		snapshot.TeamMembership = apiKey.TeamMembership
 	}
 
@@ -461,6 +420,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			VideoPrice720P:                  apiKey.Group.VideoPrice720P,
 			VideoPrice1080P:                 apiKey.Group.VideoPrice1080P,
 			VideoModelPrices:                NormalizeVideoModelPrices(apiKey.Group.VideoModelPrices),
+			VideoModels:                     apiKey.Group.VideoModels.Clone(),
 			WebSearchPricePerCall:           apiKey.Group.WebSearchPricePerCall,
 			SearchPricePer1k:                apiKey.Group.SearchPricePer1k,
 			AudioRealtimePricePerMin:        apiKey.Group.AudioRealtimePricePerMin,
@@ -481,7 +441,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			FreeOpenAIFast:                  apiKey.Group.FreeOpenAIFast,
 			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
-			ModelsListConfig:                apiKey.Group.ModelsListConfig,
+			ModelAllowlist:                  apiKey.Group.ModelAllowlist,
+			CodexModelsManifestConfig:       apiKey.Group.CodexModelsManifestConfig,
 			RPMLimit:                        apiKey.Group.RPMLimit,
 			MaxReasoningEffort:              apiKey.Group.MaxReasoningEffort,
 			MaxReasoningEffortOverLimit:     apiKey.Group.MaxReasoningEffortOverLimit,
@@ -546,7 +507,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		apiKey.ActorUser = apiKey.User
 	}
 	if snapshot.Team != nil {
-		apiKey.Team = &Team{ID: snapshot.Team.ID, Name: snapshot.Team.Name, Status: snapshot.Team.Status}
+		apiKey.Team = &Team{TeamWallet: snapshot.Team.TeamWallet, ID: snapshot.Team.ID, Name: snapshot.Team.Name, Status: snapshot.Team.Status}
 		apiKey.TeamMembership = snapshot.TeamMembership
 	}
 	if snapshot.Group != nil {
@@ -576,6 +537,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			VideoPrice720P:                  snapshot.Group.VideoPrice720P,
 			VideoPrice1080P:                 snapshot.Group.VideoPrice1080P,
 			VideoModelPrices:                NormalizeVideoModelPrices(snapshot.Group.VideoModelPrices),
+			VideoModels:                     snapshot.Group.VideoModels.Clone(),
 			WebSearchPricePerCall:           snapshot.Group.WebSearchPricePerCall,
 			SearchPricePer1k:                snapshot.Group.SearchPricePer1k,
 			AudioRealtimePricePerMin:        snapshot.Group.AudioRealtimePricePerMin,
@@ -596,7 +558,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			FreeOpenAIFast:                  snapshot.Group.FreeOpenAIFast,
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
-			ModelsListConfig:                snapshot.Group.ModelsListConfig,
+			ModelAllowlist:                  snapshot.Group.ModelAllowlist,
+			CodexModelsManifestConfig:       snapshot.Group.CodexModelsManifestConfig,
 			RPMLimit:                        snapshot.Group.RPMLimit,
 			MaxReasoningEffort:              snapshot.Group.MaxReasoningEffort,
 			MaxReasoningEffortOverLimit:     snapshot.Group.MaxReasoningEffortOverLimit,

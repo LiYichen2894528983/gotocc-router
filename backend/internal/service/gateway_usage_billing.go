@@ -73,6 +73,7 @@ type usageLogBestEffortWriter interface {
 
 // postUsageBillingParams 统一扣费所需的参数
 type postUsageBillingParams struct {
+	PricingAt             time.Time
 	Cost                  *CostBreakdown
 	User                  *User
 	APIKey                *APIKey
@@ -112,6 +113,9 @@ func QuotaPlatform(ctx context.Context, apiKey *APIKey) string {
 		return platform
 	}
 	platform := PlatformFromAPIKey(apiKey)
+	if platform == PlatformVideo {
+		return PlatformOpenAI
+	}
 	if platform == PlatformComposite {
 		return ""
 	}
@@ -186,7 +190,7 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	//   - flusher_enabled=false（降级）:保留原有同步直写 DB
 	//   - flusher_enabled=true:跳过直写 DB，由 flusher 异步批量刷（markDirty 在 IncrementUserPlatformQuotaUsage 内部完成）
 	//   - 失败仅记 ALERT log + counter，不阻断主扣费流程
-	if !p.IsSubscriptionBill && p.Platform != "" && cost.ActualCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil {
+	if !p.IsSubscriptionBill && p.Platform != "" && cost.ActualCost > 0 && p.User != nil && p.User.TeamWalletID == nil && deps.userPlatformQuotaRepo != nil {
 		if deps.billingCacheService.HasUserPlatformQuotaLimit(billingCtx, p.User.ID, p.Platform) {
 			deps.billingCacheService.IncrementUserPlatformQuotaUsage(p.User.ID, p.Platform, cost.ActualCost)
 			if deps.cfg == nil || !deps.cfg.Database.UserPlatformQuotaFlusherEnabled {
@@ -282,7 +286,18 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		return nil
 	}
 
+	snapshot := p.APIKey.ResellerPriceAt(p.PricingAt)
+	if p.APIKey.TeamID != nil || (snapshot != nil && snapshot.ManagedCredits) {
+		p.IsSubscriptionBill = false
+		p.Subscription = nil
+		if usageLog != nil {
+			usageLog.SubscriptionID = nil
+			usageLog.BillingType = BillingTypeBalance
+		}
+	}
 	cmd := &UsageBillingCommand{
+		ResellerSnapshot:   snapshot,
+		TeamWallet:         p.APIKey.TeamID != nil,
 		RequestID:          requestID,
 		APIKeyID:           p.APIKey.ID,
 		UserID:             p.User.ID,
@@ -295,6 +310,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.APIKey.TeamID != nil {
 		teamID := *p.APIKey.TeamID
 		cmd.TeamID = &teamID
+		cmd.TeamMembershipID = p.APIKey.TeamMembership.ID
 	}
 	if usageLog != nil {
 		cmd.Model = usageLog.Model
@@ -319,7 +335,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	// user-specific) rate multiplier consumes subscription quota at the expected
 	// speed. TotalCost remains the raw (pre-multiplier) value; downstream guards
 	// on "> 0" still correctly skip free subscriptions (RateMultiplier == 0).
-	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
+	if (cmd.ResellerSnapshot == nil || !cmd.ResellerSnapshot.ManagedCredits) && p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
 		cmd.SubscriptionCost = p.Cost.ActualCost
 	} else if p.Cost.ActualCost > 0 {
@@ -346,6 +362,9 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	}
 
 	cmd := buildUsageBillingCommand(requestID, usageLog, p)
+	if cmd != nil && cmd.ResellerSnapshot != nil && cmd.ResellerSnapshot.ManagedCredits && (cmd.RequestID == "" || repo == nil) {
+		return false, ErrBillingServiceUnavailable
+	}
 	if cmd == nil || cmd.RequestID == "" {
 		postUsageBilling(ctx, p, deps)
 		return true, nil
@@ -390,7 +409,7 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
 			refreshSubscriptionCacheAfterBilling(ctx, p, deps, "unified")
 		}
-	} else if p.Cost.ActualCost > 0 && p.User != nil {
+	} else if p.Cost.ActualCost > 0 && p.User != nil && p.User.TeamWalletID == nil {
 		syncBalanceCacheAfterDeduction(ctx, p, deps, result)
 	}
 
@@ -407,7 +426,7 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 	//     限制在并发 in-flight 请求数量内（旧实现的异步入队会让超支无限累积直到 worker 处理）
 	//   - DB 异步(flusher_enabled=false):在独立 goroutine 中走 detached context,失败用 ALERT log 触发 oncall 对账
 	//   - flusher_enabled=true:不直写 DB,由 flusher 异步批量刷（markDirty 已在 IncrementUserPlatformQuotaUsage 内部完成）
-	if !p.IsSubscriptionBill && p.Platform != "" && p.Cost.ActualCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil {
+	if !p.IsSubscriptionBill && p.Platform != "" && p.Cost.ActualCost > 0 && p.User != nil && p.User.TeamWalletID == nil && deps.userPlatformQuotaRepo != nil {
 		if deps.billingCacheService.HasUserPlatformQuotaLimit(ctx, p.User.ID, p.Platform) {
 			deps.billingCacheService.IncrementUserPlatformQuotaUsage(p.User.ID, p.Platform, p.Cost.ActualCost)
 			if deps.cfg == nil || !deps.cfg.Database.UserPlatformQuotaFlusherEnabled {
@@ -436,7 +455,9 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 
 	// Notification checks run async — all parameters are already captured,
 	// no dependency on the request context or upstream connection.
-	go notifyBalanceLow(p, deps, result)
+	if p.User == nil || p.User.TeamWalletID == nil {
+		go notifyBalanceLow(p, deps, result)
+	}
 	go notifyAccountQuota(p, deps, result)
 }
 
@@ -465,6 +486,10 @@ func syncBalanceCacheAfterDeduction(ctx context.Context, p *postUsageBillingPara
 	if p == nil || p.Cost == nil || p.User == nil || deps == nil || deps.billingCacheService == nil {
 		return
 	}
+	if snapshot := p.APIKey.ResellerPriceAt(p.PricingAt); snapshot != nil && snapshot.ManagedCredits {
+		_ = deps.billingCacheService.InvalidateUserBalance(ctx, snapshot.OwnerID)
+		return
+	}
 	if result != nil && result.NewBalance != nil && deps.billingCacheService.balanceBelowEligibilityThreshold(*result.NewBalance) {
 		if err := deps.billingCacheService.InvalidateUserBalance(ctx, p.User.ID); err != nil {
 			slog.Warn("invalidate balance cache after exhausted deduction failed",
@@ -475,6 +500,16 @@ func syncBalanceCacheAfterDeduction(ctx context.Context, p *postUsageBillingPara
 			)
 		}
 		return
+	}
+	if deps.billingCacheService.InflightReservationEnabled() {
+		// 在途预留开启时同步扣减余额缓存：计费任务结束后才会释放预留，
+		// 必须保证此时准入读取的缓存余额已反映本次扣费，否则释放与扣减之间
+		// 仍存在「在途=0 且余额未扣」的窗口。本函数运行在计费 worker 中，不在请求热路径。
+		err := deps.billingCacheService.DeductBalanceCache(ctx, p.User.ID, p.Cost.ActualCost)
+		if err == nil {
+			return
+		}
+		logger.LegacyPrintf("service.gateway", "Warning: sync deduct balance cache failed for user %d, falling back to queue: %v", p.User.ID, err)
 	}
 	deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
 }
@@ -488,7 +523,7 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 			slog.Error("panic in notifyBalanceLow", "recover", r)
 		}
 	}()
-	if p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
+	if p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || p.User.ResellerCustomer != nil || deps.balanceNotifyService == nil {
 		slog.Debug("notifyBalanceLow: skipped",
 			"is_subscription", p.IsSubscriptionBill,
 			"actual_cost", p.Cost.ActualCost,
@@ -874,7 +909,8 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				CacheReadTokens:     result.Usage.CacheReadInputTokens,
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
-			cost.TotalCost,
+			cost.TotalCost, pricingAt,
+			accountStatsLongContextPricingEnabled(nil),
 		)
 	}
 
@@ -897,6 +933,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	requestID := usageLog.RequestID
 	usageLogPersisted, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
+		PricingAt:             pricingAt,
 		Cost:                  cost,
 		User:                  user,
 		APIKey:                apiKey,
@@ -950,6 +987,7 @@ func (s *GatewayService) calculateRecordUsageCost(
 				Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
 				UsageUnits: result.AudioUsage.DurationOrUnits, SizeTier: result.AudioUsage.Mode,
 				RateMultiplier: multiplier, Resolver: s.resolver, Resolved: resolved,
+				ReasoningEffort: optionalStringValue(result.ReasoningEffort),
 			})
 			if err == nil {
 				return cost
@@ -1074,6 +1112,7 @@ func (s *GatewayService) calculateImageCost(
 			Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
 			RequestCount: result.ImageCount, SizeTier: sizeTier,
 			RateMultiplier: multiplier, Resolver: s.resolver, Resolved: resolved,
+			ReasoningEffort: optionalStringValue(result.ReasoningEffort),
 		})
 		if err == nil {
 			return cost
@@ -1091,16 +1130,17 @@ func (s *GatewayService) calculateImageCost(
 		}
 		gid := apiKey.Group.ID
 		cost, err := s.billingService.CalculateCostUnified(CostInput{
-			Ctx:            ctx,
-			Model:          billingModel,
-			GroupID:        &gid,
-			Group:          apiKey.Group,
-			Tokens:         tokens,
-			RequestCount:   result.ImageCount,
-			SizeTier:       sizeTier,
-			RateMultiplier: multiplier,
-			Resolver:       s.resolver,
-			Resolved:       resolved,
+			Ctx:             ctx,
+			Model:           billingModel,
+			GroupID:         &gid,
+			Group:           apiKey.Group,
+			Tokens:          tokens,
+			RequestCount:    result.ImageCount,
+			SizeTier:        sizeTier,
+			RateMultiplier:  multiplier,
+			Resolver:        s.resolver,
+			Resolved:        resolved,
+			ReasoningEffort: optionalStringValue(result.ReasoningEffort),
 		})
 		if err != nil {
 			logger.LegacyPrintf("service.gateway", "Calculate image token cost failed: %v", err)
@@ -1139,15 +1179,16 @@ func (s *GatewayService) calculateTokenCost(
 	}
 
 	cost, err := s.billingService.CalculateTokenCostForRequest(TokenCostRequest{
-		Ctx:            ctx,
-		Model:          billingModel,
-		Group:          apiKey.Group,
-		Tokens:         tokens,
-		RateMultiplier: multiplier,
-		PricingAt:      pricingAt,
-		ServiceTier:    optionalStringValue(result.ServiceTier),
-		Resolver:       s.resolver,
-		Resolved:       resolved,
+		Ctx:             ctx,
+		Model:           billingModel,
+		Group:           apiKey.Group,
+		Tokens:          tokens,
+		RateMultiplier:  multiplier,
+		PricingAt:       pricingAt,
+		ServiceTier:     optionalStringValue(result.ServiceTier),
+		ReasoningEffort: optionalStringValue(result.ReasoningEffort),
+		Resolver:        s.resolver,
+		Resolved:        resolved,
 	})
 	if err != nil {
 		logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
@@ -1192,6 +1233,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		APIKeyID:                 apiKey.ID,
 		AccountID:                account.ID,
 		RequestID:                requestID,
+		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, false),
 		Model:                    result.Model,
 		RequestedModel:           requestedModel,
 		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
@@ -1219,6 +1261,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		DurationMs:               &durationMs,
 		FirstTokenMs:             result.FirstTokenMs,
 		LastTokenMs:              result.LastTokenMs,
+		TimingVersion:            1,
 		FirstOutputMs:            result.FirstOutputMs,
 		FirstOutputKind:          optionalTrimmedStringPtr(result.FirstOutputKind),
 		ImageCount:               result.ImageCount,

@@ -84,6 +84,21 @@ export default {
     columnAlwaysVisible: '该列固定显示，不可隐藏',
     createKey: '创建密钥',
     editKey: '编辑密钥',
+    bulkEdit: {
+      title: '批量编辑',
+      selectedCount: '已选择 {count} 个密钥',
+      selectKey: '选择密钥 {name}',
+      clearSelection: '取消选择',
+      hint: '勾选需要修改的字段，未勾选的字段保持原值。',
+      limitHint: '输入 0 表示不限制；已用额度保持不变。',
+      ipHint: '每行一个 IP 或 CIDR；留空将清空所选密钥的此项名单。',
+      invalidLimit: '请输入大于或等于 0 的有效金额。',
+      invalidExpiration: '请选择有效的过期时间，或勾选永久有效。',
+      apply: '应用到 {count} 个密钥',
+      success: '已更新 {count} 个密钥',
+      partialFailure: '已更新 {success} 个密钥，{failed} 个失败',
+      failureHint: '以下密钥更新失败，可修改设置后重试。再次提交只会更新失败的密钥。'
+    },
     deleteKey: '删除密钥',
     deleteConfirmMessage: "确定要删除 '{name}' 吗？此操作无法撤销。",
     id: 'ID',
@@ -102,6 +117,19 @@ export default {
     nameLabel: '名称',
     namePlaceholder: '我的 API 密钥',
     groupLabel: '分组',
+    providerLabel: '厂商',
+    providers: {
+      anthropic: 'Anthropic',
+      openai: 'OpenAI',
+      domestic: '国产模型',
+      other: '其他'
+    },
+    providerHints: {
+      anthropic: '选择 Anthropic / Claude 的可用分组',
+      openai: '选择 OpenAI / GPT 的可用分组',
+      domestic: '包含 DeepSeek、Kimi、智谱 GLM、MiniMax',
+      other: '包含 Gemini、Grok、Antigravity、OpenCode 和混合分组'
+    },
     selectGroup: '选择分组',
     statusLabel: '状态',
     selectStatus: '选择状态',
@@ -129,6 +157,23 @@ export default {
       auto: '智能路由',
       fixedHint: '每个请求都会通过所选分组发送。',
       autoHint: '每个请求由服务端自动选择一个有权限的分组。'
+    },
+    routingPriority: {
+      title: '智能路由分组优先级',
+      readOnly: '只读',
+      notice: '现在可在此查看分组优先级。仅展示同一模型有多个可选分组时的顺序；只有一个可选分组的模型不参与排名。',
+      loading: '正在加载当前分组优先级…',
+      loadFailed: '分组优先级加载失败，请重试。',
+      retry: '重新加载',
+      defaultOrder: '默认分组顺序',
+      highFirst: '由高到低',
+      adminSource: '管理员默认顺序；未单独排列的分组按分组排序补充。仅在分组支持同一请求时比较优先级。',
+      fallbackSource: '按分组排序，排序值相同时按分组 ID 从小到大。仅在分组支持同一请求时比较优先级。',
+      empty: '暂无需要比较优先级的分组。当前可展示的模型没有多个兼容分组，因此不显示排名。',
+      exceptionsTitle: '部分模型有独立规则（{count} 个模型）· 展开查看',
+      exceptionsHint: '以下模型使用各自的分组顺序，优先于默认顺序。列表已包含规则之外仍可参与的默认分组；精确匹配优先，其次采用最长前缀匹配。',
+      matchedRule: '匹配规则：{rule}',
+      catalogHint: '基于当前权限和可列出的模型配置；通配符或透传模型可能无法完整列出。实际选组还取决于接口和客户端要求。选组后额度不足或上游故障不会自动切换分组。'
     },
     usage: '用量',
     today: '今日',
@@ -169,10 +214,10 @@ export default {
       openai: {
         description: '将以下配置文件添加到 Codex CLI 配置目录中。',
         authModeTitle: 'Codex 认证模式',
-        authModeDescription: '兼容模式保留旧版 Codex 配置；API Key Mode 用于授权客户端图片执行器。',
+        authModeDescription: '兼容模式保留旧版 Codex 配置；API 密钥模式用于授权客户端图片执行器。',
         authModeLegacy: '兼容模式',
-        authModeApiKey: 'API Key Mode',
-        authModeApiKeyRestartNotice: '保存此配置后，必须完全退出并重启 Codex Desktop 或 CLI，然后新建 task，让客户端重新构建工具注册表。',
+        authModeApiKey: 'API 密钥模式',
+        authModeApiKeyRestartNotice: '保存此配置后，必须完全退出并重启 Codex Desktop 或 CLI，然后新建任务，让客户端重新构建工具注册表。',
         configTomlHint: '请确保以下内容位于 config.toml 文件的开头部分',
         note: '请确保配置目录存在。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。',
         noteWindows:
@@ -184,7 +229,12 @@ export default {
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
+        systemOne: 'System One',
         opencode: 'OpenCode'
+      },
+      typesafe: {
+        description: '通过 TypeSafe 原生 System One 端点调用 Jev。',
+        note: 'System One 不支持流式请求，也不兼容 Chat Completions、Responses、Claude Code 或 Codex 客户端。'
       },
       antigravity: {
         description: '为 Antigravity 分组配置 API 访问。请根据您使用的客户端选择对应的配置方式。',
@@ -209,7 +259,7 @@ export default {
         configTomlHint:
           '官方路径：~/.grok/config.toml（或 $GROK_HOME）。请填写 [endpoints]（models_base_url / models_list_url / xai_api_base_url / cli_chat_proxy_base_url）、[auth] preferred_method=api_key、[models]、[session]、[features] 图片/视频覆盖。优先 env_key，勿硬编码 api_key；文本模型必须 api_backend=responses。合并前备份，保存后运行 grok inspect。',
         codexConfigTomlHint:
-          'Codex 官方：wire_api 仅支持 "responses"；优先 env_key，勿与 experimental_bearer_token 混用；非 OpenAI 网关默认 supports_websockets = false（Sub2API 仍可接客户端 WS 并桥接到 HTTP/SSE）。合并前备份 ~/.codex/config.toml。',
+          'Codex 官方：wire_api 仅支持 "responses"；优先 env_key，勿与 experimental_bearer_token 混用；非 OpenAI 网关默认 supports_websockets = false（Sub2API Plus 仍可接客户端 WS 并桥接到 HTTP/SSE）。合并前备份 ~/.codex/config.toml。',
         note:
           '导出 GROK_MODELS_BASE_URL 与 XAI_API_KEY，将完整 config.toml（endpoints/auth/models/session/features）保存为 ~/.grok/config.toml，运行 grok inspect，再用 /model 选择 grok-4.5（编程场景可用 grok-build-0.1）。',
         noteWindows:
@@ -224,23 +274,33 @@ export default {
       deepseek: {
         description: '通过当前 DeepSeek 分组配置 Claude Code、Codex 或 OpenCode。',
         codexDescription: '使用 API Key 配置 Codex，并通过当前 DeepSeek 分组发送请求。',
-        codexConfigTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',
+        codexConfigTomlHint: '保存 config.toml 后重启 Codex，客户端会加载远程目录。使用本地文件模式时，还需下载目录并保存到配置中的路径。',
+        codexNote: '启动 Codex 前先导出 SUB2API_API_KEY。下载的目录只包含模型元数据，不包含 API Key。'
+      },
+      minimax: {
+        description: '通过当前 MiniMax 分组配置 Claude Code、Codex 或 OpenCode。',
+        codexDescription: '使用 API Key 配置 Codex，并通过当前 MiniMax 分组发送请求。',
+        codexConfigTomlHint: '保存 config.toml 后重启 Codex，客户端会加载远程目录。使用本地文件模式时，还需下载目录并保存到配置中的路径。',
         codexNote: '启动 Codex 前先导出 SUB2API_API_KEY。下载的目录只包含模型元数据，不包含 API Key。'
       },
       composite: {
         description: '通过当前 Composite 路由分组配置受支持的客户端。',
         codexDescription: '使用 API Key 和当前 Composite 分组的完整模型目录配置 Codex。',
-        codexConfigTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',
+        codexConfigTomlHint: '保存 config.toml 后重启 Codex，客户端会加载远程目录。使用本地文件模式时，还需下载目录并保存到配置中的路径。',
         codexNote: '启动 Codex 前先导出 SUB2API_API_KEY；分组会根据目录中选中的模型路由请求。'
       },
       routedCodex: {
         description: '使用当前路由分组的完整模型目录配置 Codex。',
-        configTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',
+        configTomlHint: '保存 config.toml 后重启 Codex，客户端会加载远程目录。使用本地文件模式时，还需下载目录并保存到配置中的路径。',
         note: '启动 Codex 前先导出 SUB2API_API_KEY。下载的目录只包含模型元数据，不包含 API Key。'
       },
       codexModelCatalog: {
+        mode: '目录来源',
+        remote: '远程目录（Codex 0.156.0+）',
+        local: '本地文件（旧版客户端）',
+        oversized: '完整目录超过远程加载的 1 MiB 限制，已改为本地文件。请下载目录并保存到配置中的路径。',
         title: 'Codex 模型目录',
-        description: '使用当前 API Key 获取目录，并保存到 config.toml 引用的路径。',
+        description: 'Codex 会使用配置中的认证信息加载并刷新远程目录。使用本地文件模式时，请在下方获取目录并保存到配置中的路径。',
         fetch: '获取目录',
         retry: '重试',
         download: '下载目录',
@@ -313,8 +373,9 @@ export default {
     expiresAt: '过期时间',
     noExpiration: '永久有效',
     status: {
-      active: '活跃',
+      active: '已启用',
       inactive: '已停用',
+      disabled: '已禁用',
       quota_exhausted: '额度耗尽',
       expired: '已过期'
     }
@@ -326,7 +387,7 @@ export default {
     description: '查看和分析您的 API 使用历史',
     costDetails: '费用明细',
     tokenDetails: 'Token 明细',
-    cacheTtlOverriddenHint: '缓存 TTL Override 已启用',
+    cacheTtlOverriddenHint: '缓存 TTL 替换已启用',
     cacheTtlOverriddenLabel: 'TTL 替换',
     cacheTtlOverridden5m: '按 5m 计费',
     cacheTtlOverridden1h: '按 1h 计费',
@@ -382,11 +443,9 @@ export default {
     tokens: 'Token',
     cost: '费用',
 		firstToken: '首 Token',
-		firstTokenOrLegacyEvent: '首 Token / 旧版首事件',
     duration: '耗时',
     latency: '延迟',
 		latencyFirstToken: '首字',
-		latencyLegacyFirstEvent: '旧版首事件',
     latencyFirstOutput: '首输出',
     latencyFirstOutputKind: '首输出类型',
     latencyOutputKindText: '文本',
@@ -395,13 +454,23 @@ export default {
     latencyFirstReasoning: '首推理',
     latencyFirstTool: '首工具输出',
     latencyDetails: '延迟详情',
-    latencyLegacyFirstEventHint: '旧版首事件，不可与新口径严格首字直接对比。',
     latencyMediaOnlyHint: '仅有媒体首输出，无严格首字（token-like）样本。',
     latencyMixedModalityHint: '首输出与首字时间不同，存在更早的非文本或聚合输出。',
     latencyNonTextFirstHint: '首个 token-like 输出为推理或工具调用，不一定是正文。',
     latencyDuration: '总耗时',
+    latencyLastToken: '末 Token',
     latencyTps: 'TPS',
-    latencyTpsHint: '估算平均文本输出速率：文本输出 Token ÷（末 Token − 首 Token）；仅完整 stream/ws 请求。生成窗过短或文本 Token 过少时显示为 -；低于 1 或高于 1000 显示为 < 1 / > 1000。',
+    latencyCompaction: '压缩结果',
+    timingUnavailableHistorical: '未采集可确认口径的首字时序',
+    timingUnavailableLive: 'Live 会话汇总，无逐 Token 生成时序',
+    timingUnavailableCompaction: '压缩结果没有可观测的 Token 增量',
+    timingUnavailableNoTokens: '没有可计费的文本 Token 或生成时序',
+    timingUnavailableNoTextTokens: '没有适用的非图片、音频输出 Token',
+    averageTpsIncomplete: '请求未完成，平均值使用已记录的部分输出和耗时',
+    timingUnavailableInvalid: 'Token 或耗时数据无效',
+    averageTps: '平均 TPS',
+    averageTpsNote: '平均 TPS 说明',
+    latencyTpsHint: '请求平均输出速率 = 非图片、音频输出 Token 数 ÷ 总转发/轮次耗时，包含首 Token 等待。可能包含计费推理 Token，不代表模型纯生成速度。',
 	incomplete: '未完成',
 	incompleteHint: '请求在完整终态前结束，当前显示的用量和费用可能只是部分结果。',
 	clientDisconnected: '客户端已断开',
@@ -451,6 +520,7 @@ export default {
     cacheWrite: '写入',
     serviceTier: '服务档位',
     serviceTierPriority: 'Fast',
+    serviceTierUltrafast: 'Ultrafast',
     serviceTierFlex: 'Flex',
     serviceTierStandard: 'Standard',
     rate: '倍率',
@@ -489,6 +559,7 @@ export default {
       modelPlaceholder: '搜索模型', allCategories: '全部分类', allStatuses: '全部状态码',
       empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
       categories: {
+        security_audit: '安全审计拒绝',
         auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
         invalid_request: '参数错误', service_unavailable: '服务暂时不可用',
         upstream: '上游错误', internal: '平台错误', other: '其他', cyber: '安全策略',
@@ -520,7 +591,10 @@ export default {
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: '智谱 GLM',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      minimax: 'MiniMax',
+      stepfun: 'StepFun',
+      opencode_go: 'OpenCode'
     },
     // 检查模式（监控条目的工作方式）
     checkMode: {
@@ -537,6 +611,7 @@ export default {
         '7dSonnet': '7 天 Sonnet',
         '7dFable': '7 天 Fable',
         weekly: '周',
+        monthly: '月',
         daily: '日',
         '30d': '30 天',
         total: '总量'
@@ -614,6 +689,60 @@ export default {
 
   // Available Channels (user-facing)
   availableChannels: {
+    catalog: {
+      quoteComparison: '分组报价对比',
+      effectiveRateLabel: '生效倍率',
+      baseInputOrUnit: '基础输入 / 单价',
+      billingUnit: '计价单位',
+      searchPlaceholder: '搜索模型名称或 ID...',
+      modelCount: '{count} 个模型',
+      quoteCount: '{count} 个可用报价',
+      groupQuotes: '{count} 个分组引用',
+      exclusiveQuote: '有专属报价',
+      multipleUnits: '多种计费单位',
+      partialUnknown: '部分报价暂不可用，范围仅含已知价格。',
+      effectiveRange: '标准时段 · 已含生效倍率',
+      referenceRange: '标准时段 · 默认倍率参考价',
+      someTiered: '部分报价含阶梯',
+      someDynamic: '部分报价动态计费',
+      billingGroupNote: '实际价格取决于 API Key 绑定的分组。输入与输出区间分别统计，最低值可能来自不同分组；具体价格与附加条件请逐项对照下方报价。',
+      rateLabels: { group: '{rate}x', personal: '你的专属倍率 {rate}×', media: '媒体独立倍率 {rate}×' },
+      defaultRate: '分组默认 {rate}×',
+      overriddenPersonalRate: '你的专属倍率 {rate}×（此报价优先使用媒体独立倍率）',
+      units: { token: 'USD / 1M tokens', image: 'USD / 张', request: 'USD / 次', video: 'USD / 条视频', second: 'USD / 秒', unknown: '计价单位待确认' },
+      reasons: { pricing_unavailable: '价格暂不可用', request_dependent: '价格取决于实际请求', unsupported_unit: '暂无法展示此计价单位' },
+      copyModel: '复制模型 ID：{model}',
+      detailsFor: '查看 {model} 的全部报价详情',
+      details: '详情',
+      unitPrice: '单价',
+      baseQuote: '标准时段 · 基础档',
+      prices: '模型价格',
+      context: '上下文档位',
+      baseTier: '基础档',
+      quoteExplanation: '标准时段、Standard 服务档位报价，已包含生效倍率 {rate}×。附加条件可能影响最终扣费。',
+      ratesUnavailable: '默认倍率参考价，专属倍率暂未加载。',
+      independentRate: '媒体独立倍率覆盖分组倍率与用户专属倍率。',
+      wholeRequest: '整单按档计价：输入上下文（含缓存写入与读取）区间为（下限，上限]。等于上限仍属于本档，超过一个 token 进入下一档。',
+      videoSeconds: '视频费用 = 每秒单价 × 计费时长 × 视频数量。',
+      serviceTiers: '服务档位',
+      serviceTierNote: '仅说明计费条件，可用性由实际请求与供应商决定；各档价格均包含分组生效倍率。',
+      tiers: { priority: 'Fast / priority', flex: 'Flex', ultrafast: 'Ultrafast' },
+      reasoning: '思考等级倍率',
+      timeRules: '分时计价',
+      dynamicBilling: '动态计费',
+      weekdays: '仅周一至周五生效，不含结束时刻。',
+      peak: '订阅组 token 高峰：[{start}, {end}) {timezone}，另乘 {multiplier}×。图片按张费用不受此因子影响。',
+      official: '官方参考价',
+      officialNote: '参考价单独展示，不乘分组倍率。',
+      sort: '模型排序',
+      sortName: '名称排序',
+      sortPrice: '同单位价格排序',
+      reset: '重置筛选',
+      retry: '重试',
+      noMatches: '没有匹配的模型，请尝试其他筛选或搜索。',
+      personalRate: '专属倍率',
+      loadFailed: '加载模型目录失败'
+    },
     title: '可用渠道',
     description: '查看您可访问的渠道与其支持的模型、定价',
     searchPlaceholder: '搜索渠道或模型...',
@@ -692,6 +821,8 @@ export default {
       cacheReadShort: '读',
       tierHint: '按单次请求的总上下文（输入 + 缓存写入 + 缓存读取）所在档位对整单计价',
       tierHintMarginal: '仅超过阈值的部分按该档计价，输出不加价',
+      reasoningMultiplierBadge: '{effort} ×{multiplier}',
+      reasoningMultiplierHint: '最终转发的思考等级为 {effort} 时，整次请求的计费与额度消耗乘以 {multiplier}；未配置的等级按 1 倍计费',
       marginalBadge: '超出部分计价',
       timePricingRowHint: '按 {timezone} 时间，在该时段内发起的请求按本行价格计费',
       timePricingRowHintWeekdays:
@@ -721,7 +852,7 @@ export default {
   },
 
   affiliate: {
-    title: '邀请返利',
+    title: '代理中心',
     description: '邀请新用户注册，并将返利额度转入账户余额',
     yourCode: '我的邀请码',
     inviteLink: '邀请链接',
@@ -732,9 +863,9 @@ export default {
     loadFailed: '加载邀请返利数据失败',
     transferFailed: '转入余额失败',
     stats: {
-      rebateRate: '我的返利比例',
-      rebateRateHint: '被邀请用户每次充值后你可获得的返利比例',
-      invitedUsers: '邀请人数',
+      rebateRate: "一代 / 二代 / 三代比例",
+      rebateRateHint: "按你与每笔充值账户的邀请距离确定代次",
+      invitedUsers: "直接邀请人数",
       availableQuota: '可转返利额度',
       frozenQuota: '冻结中',
       frozenQuotaHint: '新产生的返利正在冻结期中',
@@ -749,21 +880,35 @@ export default {
       success: '已转入余额：{amount}'
     },
     invitees: {
-      title: '已邀请用户',
+      generation: "第 {level} 代",
+      title: '最近三代邀请用户',
       empty: '暂无邀请记录',
       columns: {
+        level: "邀请代次",
         email: '邮箱',
         username: '用户名',
         rebate: '返利明细',
         joinedAt: '注册时间'
       }
     },
+
+    agent: {
+      title: "代理中心",
+      applyTitle: "申请成为代理",
+      applyDescription: "点击申请即刻成为代理，无需等待审核。从开通时起，你邀请的用户充值可按规则产生返佣，开通前不补发。代理身份开通后不可退出。",
+      applyButton: "申请成为代理",
+      applying: "开通中...",
+      applied: "已成为代理",
+      applyFailed: "开通失败，请重试",
+      appliedAt: "开通时间：{time}",
+      loadFailed: "加载代理状态失败",
+    },
     tips: {
       title: '使用说明',
       line1: '将邀请码或邀请链接分享给新用户。',
-      line2: '被邀请用户充值后，你可获得 {rate} 的返利额度。',
-      line3: '返利额度可随时转入账户余额。',
-      line4: '新产生的返利需要经过冻结期后才能提现。'
+      line2: "每笔有效充值按最近三代的 {rates} 分佣，缺少的代次不补发。",
+      line3: "首充和后续充值均参与；赠额和佣金转余额不产生新佣金。",
+      line4: "冻结期结束后可将返利转入使用余额。"
     }
   },
 
@@ -796,6 +941,9 @@ export default {
     balanceAddedAffiliate: '余额充值（返利转入）',
     balanceAddedAdmin: '余额充值（管理员）',
     balanceDeductedAdmin: '余额扣除（管理员）',
+    balanceTeamTransfer: '转入团队公共余额',
+    balanceCanvasTransfer: '影策画布划转',
+    balanceCanvasTransferReversal: '影策画布划转退回',
     concurrencyAddedRedeem: '并发增加（兑换）',
     concurrencyAddedAdmin: '并发增加（管理员）',
     concurrencyReducedAdmin: '并发减少（管理员）',
@@ -806,6 +954,8 @@ export default {
     days: '天',
     codeRedeemSuccess: '兑换成功！',
     failedToRedeem: '兑换失败，请检查兑换码后重试。',
+    historyLoadFailed: '加载兑换记录失败，请重试。',
+    userRefreshFailed: '兑换成功，但账户信息刷新失败。',
     subscriptionRefreshFailed: '兑换成功，但订阅状态刷新失败。',
     pleaseEnterCode: '请输入兑换码'
   },

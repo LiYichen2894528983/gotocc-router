@@ -1099,15 +1099,100 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 	return out
 }
 
-// SupplementResponseOutput fills resp.Output from accumulated delta content
-// when the terminal event delivered an empty output array. If resp.Output is
-// already populated, this is a no-op (preserves backward compatibility).
+// SupplementResponseOutput restores empty terminal output and missing tool inputs
+// from already observed events while preserving populated terminal fields.
 func (a *BufferedResponseAccumulator) SupplementResponseOutput(resp *ResponsesResponse) {
-	if resp == nil || len(resp.Output) > 0 {
+	if resp == nil {
 		return
 	}
-	if !a.HasContent() {
+	if len(resp.Output) == 0 {
+		if a.HasContent() {
+			resp.Output = a.BuildOutput()
+		}
 		return
 	}
-	resp.Output = a.BuildOutput()
+
+	// The terminal event can carry a non-empty output array whose message has
+	// no usable text. Trusting it as-is silently drops the text that already
+	// streamed: the client gets an empty reply while usage still bills the
+	// terminal output_tokens. Refill it from the accumulated deltas; non-empty
+	// terminal text stays authoritative.
+	if a.text.Len() > 0 && !responsesOutputHasText(resp.Output) {
+		if !fillResponsesOutputText(resp.Output, a.text.String()) {
+			resp.Output = append(resp.Output, ResponsesOutput{
+				Type: "message",
+				Role: "assistant",
+				Content: []ResponsesContentPart{{
+					Type: "output_text",
+					Text: a.text.String(),
+				}},
+			})
+		}
+	}
+
+	for outputIndex := range resp.Output {
+		item := &resp.Output[outputIndex]
+		if !isResponsesToolCall(item.Type) || responsesToolCallArguments(item) != "" {
+			continue
+		}
+		for funcIndex := range a.funcCalls {
+			call := &a.funcCalls[funcIndex]
+			matchesCallID := item.CallID != "" && item.CallID == call.CallID
+			mappedFuncIndex, hasOutputIndex := a.outputIndexToFuncIdx[outputIndex]
+			if (item.CallID != "" && !matchesCallID) || (item.CallID == "" && (!hasOutputIndex || mappedFuncIndex != funcIndex)) {
+				continue
+			}
+			if call.Args.Len() > 0 {
+				if item.Type == "custom_tool_call" {
+					item.Input = call.Args.String()
+				} else {
+					item.Arguments = call.Args.String()
+				}
+			}
+			break
+		}
+	}
+}
+
+// responsesOutputHasText reports whether the terminal output already carries
+// usable message text. Whitespace-only text does not count.
+func responsesOutputHasText(output []ResponsesOutput) bool {
+	for i := range output {
+		if output[i].Type != "message" {
+			continue
+		}
+		for _, part := range output[i].Content {
+			if part.Type == "output_text" && strings.TrimSpace(part.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fillResponsesOutputText writes text into the first empty output_text part of
+// the first message item, adding an output_text part when that message has
+// none. It returns false when the output holds no message item, leaving the
+// caller to append one.
+func fillResponsesOutputText(output []ResponsesOutput, text string) bool {
+	for i := range output {
+		if output[i].Type != "message" {
+			continue
+		}
+		for j := range output[i].Content {
+			if output[i].Content[j].Type != "output_text" {
+				continue
+			}
+			if strings.TrimSpace(output[i].Content[j].Text) == "" {
+				output[i].Content[j].Text = text
+				return true
+			}
+		}
+		output[i].Content = append(output[i].Content, ResponsesContentPart{
+			Type: "output_text",
+			Text: text,
+		})
+		return true
+	}
+	return false
 }

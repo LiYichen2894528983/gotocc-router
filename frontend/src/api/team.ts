@@ -4,6 +4,9 @@ export type TeamRole = 'owner' | 'member'
 export type TeamStatus = 'active' | 'suspended'
 
 export interface Team {
+
+  balance: number
+  frozen_balance: number
   id: number
   name: string
   status: TeamStatus
@@ -37,6 +40,13 @@ export interface TeamContext {
   team: Team
   membership: TeamMembership
   owner: TeamMembership
+}
+
+export interface TeamFundingResult {
+  operation_id: string
+  amount: number
+  personal_balance: number
+  team_balance: number
 }
 
 export interface TeamInvitation {
@@ -76,6 +86,10 @@ export interface TeamUsageDaily {
   date: string
   actual_cost: number
   request_count: number
+  input_tokens: number
+  output_tokens: number
+  // 当天有用量的成员数。
+  active_members: number
 }
 
 export interface TeamUsageSummary {
@@ -83,6 +97,8 @@ export interface TeamUsageSummary {
   request_count: number
   input_tokens: number
   output_tokens: number
+  // 范围内有用量的成员数。
+  active_members: number
   daily: TeamUsageDaily[]
 }
 
@@ -107,6 +123,15 @@ export interface TeamUsageLog {
   created_at: string
 }
 
+// 团队用量按模型的汇总，按消费从高到低排列。
+export interface TeamUsageModel {
+  model: string
+  request_count: number
+  input_tokens: number
+  output_tokens: number
+  actual_cost: number
+}
+
 export interface TeamUsagePage {
   items: TeamUsageLog[]
   total: number
@@ -124,6 +149,10 @@ export interface TeamUsageQuery {
 }
 
 export const teamAPI = {
+  async fundWallet(operationID: string, amount: number): Promise<TeamFundingResult> {
+    const { data } = await apiClient.post<TeamFundingResult>('/team/wallet/fund', { operation_id: operationID, amount })
+    return data
+  },
   async current(): Promise<TeamContext> {
     const { data } = await apiClient.get<TeamContext>('/team')
     return data
@@ -205,12 +234,16 @@ export const teamAPI = {
     const { data } = await apiClient.get<TeamUsageSummary>('/team/usage', { params: query })
     return data
   },
-  async memberUsage(query: Pick<TeamUsageQuery, 'from' | 'to'> = {}): Promise<TeamMemberUsageSeries[]> {
+  async memberUsage(query: Pick<TeamUsageQuery, 'from' | 'to' | 'member_id' | 'api_key_id'> = {}): Promise<TeamMemberUsageSeries[]> {
     const { data } = await apiClient.get<TeamMemberUsageSeries[]>('/team/usage/members', { params: query })
     return data
   },
   async usageLogs(query: TeamUsageQuery = {}): Promise<TeamUsagePage> {
     const { data } = await apiClient.get<TeamUsagePage>('/team/usage/logs', { params: query })
+    return data
+  },
+  async usageModels(query: Pick<TeamUsageQuery, 'from' | 'to' | 'member_id' | 'api_key_id'> = {}): Promise<TeamUsageModel[]> {
+    const { data } = await apiClient.get<TeamUsageModel[]>('/team/usage/models', { params: query })
     return data
   },
   async keys(): Promise<TeamAPIKey[]> {

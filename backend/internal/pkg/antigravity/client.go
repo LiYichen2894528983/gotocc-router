@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/brandidentity"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
 	"io"
 	"log"
 	"net"
@@ -48,6 +50,7 @@ func NewAPIRequestWithURL(ctx context.Context, baseURL, action, accessToken stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
+	outboundidentity.ApplyDefault(req, "antigravity")
 
 	return req, nil
 }
@@ -279,7 +282,7 @@ func NewClient(proxyURL string) (*Client, error) {
 		client.Transport = transport
 	}
 	return &Client{
-		httpClient: client,
+		httpClient: brandidentity.WrapClient(client),
 	}, nil
 }
 
@@ -339,6 +342,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code, codeVerifier string) (*
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	outboundidentity.ApplyDefault(req, "antigravity")
 	resp, err := servertiming.Do(c.httpClient, req)
 	if err != nil {
 		return nil, fmt.Errorf("token 交换请求失败: %w", err)
@@ -381,6 +385,7 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*TokenR
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	outboundidentity.ApplyDefault(req, "antigravity")
 	resp, err := servertiming.Do(c.httpClient, req)
 	if err != nil {
 		return nil, fmt.Errorf("token 刷新请求失败: %w", err)
@@ -412,6 +417,7 @@ func (c *Client) GetUserInfo(ctx context.Context, accessToken string) (*UserInfo
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
+	outboundidentity.ApplyDefault(req, "antigravity")
 	resp, err := servertiming.Do(c.httpClient, req)
 	if err != nil {
 		return nil, fmt.Errorf("用户信息请求失败: %w", err)
@@ -463,6 +469,7 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
 
+		outboundidentity.ApplyDefault(req, "antigravity")
 		resp, err := servertiming.Do(c.httpClient, req)
 		if err != nil {
 			lastErr = fmt.Errorf("loadCodeAssist 请求失败: %w", err)
@@ -542,6 +549,7 @@ func (c *Client) OnboardUser(ctx context.Context, accessToken, tierID string) (s
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
 
+			outboundidentity.ApplyDefault(req, "antigravity")
 			resp, err := servertiming.Do(c.httpClient, req)
 			if err != nil {
 				lastErr = fmt.Errorf("onboardUser 请求失败: %w", err)
@@ -684,6 +692,7 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
 
+		outboundidentity.ApplyDefault(req, "antigravity")
 		resp, err := servertiming.Do(fetchClient, req)
 		if err != nil {
 			lastErr = fmt.Errorf("fetchAvailableModels 请求失败: %w", err)
@@ -839,10 +848,9 @@ func (c *Client) SetUserSettings(ctx context.Context, accessToken string) (*SetU
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
-	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
 	req.Host = "daily-cloudcode-pa.googleapis.com"
 
+	applyPrivacyIdentity(req)
 	resp, err := servertiming.Do(c.httpClient, req)
 	if err != nil {
 		return nil, fmt.Errorf("setUserSettings 请求失败: %w", err)
@@ -882,10 +890,9 @@ func (c *Client) FetchUserInfo(ctx context.Context, accessToken, projectID strin
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", GetUserAgentForContext(ctx))
-	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
 	req.Host = "daily-cloudcode-pa.googleapis.com"
 
+	applyPrivacyIdentity(req)
 	resp, err := servertiming.Do(c.httpClient, req)
 	if err != nil {
 		return nil, fmt.Errorf("fetchUserInfo 请求失败: %w", err)

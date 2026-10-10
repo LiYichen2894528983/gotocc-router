@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package config
 
 import (
@@ -78,6 +80,15 @@ func TestLoadServerTimingConfig(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, cfg.Server.EnableServerTiming)
 	})
+}
+
+func TestLoadSimpleModeKeyRateLimitEnabledFromEnvironment(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED", "true")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.SimpleModeKeyRateLimitEnabled)
 }
 
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
@@ -479,11 +490,11 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if !cfg.Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled {
 		t.Fatalf("Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled = false, want true")
 	}
-	if cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor != 1.0 {
-		t.Fatalf("Gateway.OpenAIWS.OAuthMaxConnsFactor = %v, want 1.0", cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor)
+	if cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor != 5.0 {
+		t.Fatalf("Gateway.OpenAIWS.OAuthMaxConnsFactor = %v, want 5.0", cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor)
 	}
-	if cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor != 1.0 {
-		t.Fatalf("Gateway.OpenAIWS.APIKeyMaxConnsFactor = %v, want 1.0", cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor)
+	if cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor != 5.0 {
+		t.Fatalf("Gateway.OpenAIWS.APIKeyMaxConnsFactor = %v, want 5.0", cfg.Gateway.OpenAIWS.APIKeyMaxConnsFactor)
 	}
 	if cfg.Gateway.OpenAIWS.StickySessionTTLSeconds != 3600 {
 		t.Fatalf("Gateway.OpenAIWS.StickySessionTTLSeconds = %d, want 3600", cfg.Gateway.OpenAIWS.StickySessionTTLSeconds)
@@ -517,9 +528,6 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	}
 	if cfg.Gateway.OpenAIWS.EventFlushIntervalMS != 10 {
 		t.Fatalf("Gateway.OpenAIWS.EventFlushIntervalMS = %d, want 10", cfg.Gateway.OpenAIWS.EventFlushIntervalMS)
-	}
-	if cfg.Gateway.OpenAIWS.PrewarmCooldownMS != 300 {
-		t.Fatalf("Gateway.OpenAIWS.PrewarmCooldownMS = %d, want 300", cfg.Gateway.OpenAIWS.PrewarmCooldownMS)
 	}
 	if cfg.Gateway.OpenAIWS.ClientReadLimitBytes != 64*1024*1024 {
 		t.Fatalf("Gateway.OpenAIWS.ClientReadLimitBytes = %d, want %d", cfg.Gateway.OpenAIWS.ClientReadLimitBytes, 64*1024*1024)
@@ -601,7 +609,7 @@ func TestLoadDefaultOpenAICompactModel(t *testing.T) {
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.4", cfg.Gateway.OpenAICompactModel)
+	require.Equal(t, "gpt-5.5", cfg.Gateway.OpenAICompactModel)
 }
 
 func TestLoadOpenAICompactModelFromEnv(t *testing.T) {
@@ -624,6 +632,23 @@ func TestLoadDefaultGrokFreeQuotaSoftGate(t *testing.T) {
 	require.Equal(t, 95, cfg.Gateway.Grok.FreeQuotaSoftGatePercent)
 	require.Equal(t, 24, cfg.Gateway.Grok.FreeQuotaWindowHours)
 	require.Equal(t, 60, cfg.Gateway.Grok.FreeQuotaStatsCacheSeconds)
+}
+
+func TestLoadDefaultGrokRequestCompression(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.Grok.GrokRequestCompressionEnabled)
+}
+
+func TestLoadGrokRequestCompressionFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_GROK_REQUEST_COMPRESSION_ENABLED", "false")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.Grok.GrokRequestCompressionEnabled)
 }
 
 func TestLoadDefaultOpenAIHTTP2Enabled(t *testing.T) {
@@ -849,6 +874,12 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 
 	wantHosts := []string{
 		"api.kimi.com",
+		"api.kimi.ai",
+		"api.deepseek.com",
+		"api.stepfun.com",
+		"api.stepfun.ai",
+		"agent.minimax.cn",
+		"agent.minimax.io",
 		"api.moonshot.ai",
 		"api.moonshot.cn",
 	}
@@ -1233,6 +1264,21 @@ func TestLoadDefaultUsageCleanupConfig(t *testing.T) {
 	}
 	if cfg.UsageCleanup.TaskTimeoutSeconds != 1800 {
 		t.Fatalf("UsageCleanup.TaskTimeoutSeconds = %d, want 1800", cfg.UsageCleanup.TaskTimeoutSeconds)
+	}
+}
+
+func TestLoadDefaultOpsCleanupConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Ops.Cleanup.Enabled {
+		t.Fatal("Ops.Cleanup.Enabled = false, want true")
+	}
+	if cfg.Ops.Cleanup.SystemLogRetentionDays != 30 {
+		t.Fatalf("Ops.Cleanup.SystemLogRetentionDays = %d, want 30", cfg.Ops.Cleanup.SystemLogRetentionDays)
 	}
 }
 
@@ -2183,6 +2229,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "ops.cleanup.error_log_retention_days",
 		},
 		{
+			name:    "ops cleanup system log retention",
+			mutate:  func(c *Config) { c.Ops.Cleanup.SystemLogRetentionDays = 0 },
+			wantErr: "ops.cleanup.system_log_retention_days",
+		},
+		{
 			name:    "ops cleanup minute retention",
 			mutate:  func(c *Config) { c.Ops.Cleanup.MinuteMetricsRetentionDays = -1 },
 			wantErr: "ops.cleanup.minute_metrics_retention_days",
@@ -2250,28 +2301,14 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			wantErr: "gateway.openai_ws.max_ingress_connections_per_api_key",
 		},
 		{
-			name:    "min_idle_per_account 不能为负数",
-			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MinIdlePerAccount = -1 },
-			wantErr: "gateway.openai_ws.min_idle_per_account",
-		},
-		{
 			name:    "max_idle_per_account 不能为负数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MaxIdlePerAccount = -1 },
 			wantErr: "gateway.openai_ws.max_idle_per_account",
 		},
 		{
-			name: "min_idle_per_account 不能大于 max_idle_per_account",
-			mutate: func(c *Config) {
-				c.Gateway.OpenAIWS.MinIdlePerAccount = 3
-				c.Gateway.OpenAIWS.MaxIdlePerAccount = 2
-			},
-			wantErr: "gateway.openai_ws.min_idle_per_account must be <= max_idle_per_account",
-		},
-		{
 			name: "max_idle_per_account 不能大于 max_conns_per_account",
 			mutate: func(c *Config) {
 				c.Gateway.OpenAIWS.MaxConnsPerAccount = 2
-				c.Gateway.OpenAIWS.MinIdlePerAccount = 1
 				c.Gateway.OpenAIWS.MaxIdlePerAccount = 3
 			},
 			wantErr: "gateway.openai_ws.max_idle_per_account must be <= max_conns_per_account",
@@ -2290,11 +2327,6 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			name:    "write_timeout_seconds 必须为正数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.WriteTimeoutSeconds = 0 },
 			wantErr: "gateway.openai_ws.write_timeout_seconds",
-		},
-		{
-			name:    "pool_target_utilization 必须在 (0,1]",
-			mutate:  func(c *Config) { c.Gateway.OpenAIWS.PoolTargetUtilization = 0 },
-			wantErr: "gateway.openai_ws.pool_target_utilization",
 		},
 		{
 			name:    "queue_limit_per_conn 必须为正数",
@@ -2653,5 +2685,44 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	}
 	if cfg.Gateway.ImageStreamDataIntervalTimeout <= cfg.Gateway.StreamDataIntervalTimeout {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
+	}
+}
+
+func TestLoadSimpleModeAutoCreateDefaultGroups(t *testing.T) {
+	for _, loader := range []struct {
+		name string
+		load func() (*Config, error)
+	}{{"Load", Load}, {"LoadForBootstrap", LoadForBootstrap}} {
+		t.Run(loader.name, func(t *testing.T) {
+			for _, tt := range []struct {
+				name  string
+				yaml  string
+				env   string
+				unset bool
+				want  bool
+			}{
+				{name: "unset env uses application default", unset: true, want: true},
+				{name: "empty env uses application default", want: true},
+				{name: "unset env preserves yaml false", unset: true, yaml: "simple_mode:\n  auto_create_default_groups: false\n", want: false},
+				{name: "empty env preserves yaml false", yaml: "simple_mode:\n  auto_create_default_groups: false\n", want: false},
+				{name: "env false overrides yaml true", yaml: "simple_mode:\n  auto_create_default_groups: true\n", env: "false", want: false},
+				{name: "env false without yaml", env: "false", want: false},
+				{name: "env true overrides yaml false", yaml: "simple_mode:\n  auto_create_default_groups: false\n", env: "true", want: true},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					resetViperWithJWTSecret(t)
+					t.Setenv("SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS", tt.env)
+					if tt.unset {
+						require.NoError(t, os.Unsetenv("SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS"))
+					}
+					path := filepath.Join(t.TempDir(), "config.yaml")
+					require.NoError(t, os.WriteFile(path, []byte("run_mode: simple\n"+tt.yaml), 0o600))
+					t.Setenv("CONFIG_FILE", path)
+					cfg, err := loader.load()
+					require.NoError(t, err)
+					require.Equal(t, tt.want, cfg.SimpleMode.AutoCreateDefaultGroups)
+				})
+			}
+		})
 	}
 }

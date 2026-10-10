@@ -9,6 +9,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/LuckyKuang/sub2api-plus/internal/domain"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
 )
 
 const (
@@ -56,6 +57,16 @@ const (
 	FieldFiveHourLimitUsd = "five_hour_limit_usd"
 	// FieldDefaultValidityDays holds the string denoting the default_validity_days field in the database.
 	FieldDefaultValidityDays = "default_validity_days"
+	// FieldQuotaResetSourceAccountID holds the string denoting the quota_reset_source_account_id field in the database.
+	FieldQuotaResetSourceAccountID = "quota_reset_source_account_id"
+	// FieldQuotaResetSourceAccountName holds the string denoting the quota_reset_source_account_name field in the database.
+	FieldQuotaResetSourceAccountName = "quota_reset_source_account_name"
+	// FieldQuotaResetSourceResetAt holds the string denoting the quota_reset_source_reset_at field in the database.
+	FieldQuotaResetSourceResetAt = "quota_reset_source_reset_at"
+	// FieldQuotaResetIncludeMonthly holds the string denoting the quota_reset_include_monthly field in the database.
+	FieldQuotaResetIncludeMonthly = "quota_reset_include_monthly"
+	// FieldQuotaResetConfigVersion holds the string denoting the quota_reset_config_version field in the database.
+	FieldQuotaResetConfigVersion = "quota_reset_config_version"
 	// FieldAllowImageGeneration holds the string denoting the allow_image_generation field in the database.
 	FieldAllowImageGeneration = "allow_image_generation"
 	// FieldAllowBatchImageGeneration holds the string denoting the allow_batch_image_generation field in the database.
@@ -84,6 +95,8 @@ const (
 	FieldVideoPrice720p = "video_price_720p"
 	// FieldVideoPrice1080p holds the string denoting the video_price_1080p field in the database.
 	FieldVideoPrice1080p = "video_price_1080p"
+	// FieldVideoModels holds the string denoting the video_models field in the database.
+	FieldVideoModels = "video_models"
 	// FieldVideoModelPrices holds the string denoting the video_model_prices field in the database.
 	FieldVideoModelPrices = "video_model_prices"
 	// FieldWebSearchPricePerCall holds the string denoting the web_search_price_per_call field in the database.
@@ -132,8 +145,10 @@ const (
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
 	FieldMessagesDispatchModelConfig = "messages_dispatch_model_config"
-	// FieldModelsListConfig holds the string denoting the models_list_config field in the database.
-	FieldModelsListConfig = "models_list_config"
+	// FieldModelAllowlist holds the string denoting the model_allowlist field in the database.
+	FieldModelAllowlist = "model_allowlist"
+	// FieldCodexModelsManifestConfig holds the string denoting the codex_models_manifest_config field in the database.
+	FieldCodexModelsManifestConfig = "codex_models_manifest_config"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
 	// FieldMaxReasoningEffort holds the string denoting the max_reasoning_effort field in the database.
@@ -243,6 +258,11 @@ var Columns = []string{
 	FieldMonthlyLimitUsd,
 	FieldFiveHourLimitUsd,
 	FieldDefaultValidityDays,
+	FieldQuotaResetSourceAccountID,
+	FieldQuotaResetSourceAccountName,
+	FieldQuotaResetSourceResetAt,
+	FieldQuotaResetIncludeMonthly,
+	FieldQuotaResetConfigVersion,
 	FieldAllowImageGeneration,
 	FieldAllowBatchImageGeneration,
 	FieldImageRateIndependent,
@@ -257,6 +277,7 @@ var Columns = []string{
 	FieldVideoPrice480p,
 	FieldVideoPrice720p,
 	FieldVideoPrice1080p,
+	FieldVideoModels,
 	FieldVideoModelPrices,
 	FieldWebSearchPricePerCall,
 	FieldSearchPricePer1k,
@@ -281,7 +302,8 @@ var Columns = []string{
 	FieldRequirePrivacySet,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
-	FieldModelsListConfig,
+	FieldModelAllowlist,
+	FieldCodexModelsManifestConfig,
 	FieldRpmLimit,
 	FieldMaxReasoningEffort,
 	FieldMaxReasoningEffortOverLimit,
@@ -358,6 +380,14 @@ var (
 	SubscriptionTypeValidator func(string) error
 	// DefaultDefaultValidityDays holds the default value on creation for the "default_validity_days" field.
 	DefaultDefaultValidityDays int
+	// DefaultQuotaResetSourceAccountName holds the default value on creation for the "quota_reset_source_account_name" field.
+	DefaultQuotaResetSourceAccountName string
+	// QuotaResetSourceAccountNameValidator is a validator for the "quota_reset_source_account_name" field. It is called by the builders before save.
+	QuotaResetSourceAccountNameValidator func(string) error
+	// DefaultQuotaResetIncludeMonthly holds the default value on creation for the "quota_reset_include_monthly" field.
+	DefaultQuotaResetIncludeMonthly bool
+	// DefaultQuotaResetConfigVersion holds the default value on creation for the "quota_reset_config_version" field.
+	DefaultQuotaResetConfigVersion int64
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
 	DefaultAllowImageGeneration bool
 	// DefaultAllowBatchImageGeneration holds the default value on creation for the "allow_batch_image_generation" field.
@@ -374,6 +404,8 @@ var (
 	DefaultVideoRateIndependent bool
 	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
 	DefaultVideoRateMultiplier float64
+	// DefaultVideoModels holds the default value on creation for the "video_models" field.
+	DefaultVideoModels videoprotocol.Models
 	// SearchPricePer1kValidator is a validator for the "search_price_per_1k" field. It is called by the builders before save.
 	SearchPricePer1kValidator func(float64) error
 	// AudioRealtimePricePerMinValidator is a validator for the "audio_realtime_price_per_min" field. It is called by the builders before save.
@@ -412,8 +444,10 @@ var (
 	DefaultMappedModelValidator func(string) error
 	// DefaultMessagesDispatchModelConfig holds the default value on creation for the "messages_dispatch_model_config" field.
 	DefaultMessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig
-	// DefaultModelsListConfig holds the default value on creation for the "models_list_config" field.
-	DefaultModelsListConfig domain.GroupModelsListConfig
+	// DefaultModelAllowlist holds the default value on creation for the "model_allowlist" field.
+	DefaultModelAllowlist domain.GroupModelAllowlist
+	// DefaultCodexModelsManifestConfig holds the default value on creation for the "codex_models_manifest_config" field.
+	DefaultCodexModelsManifestConfig domain.GroupCodexModelsManifestConfig
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 	// DefaultMaxReasoningEffort holds the default value on creation for the "max_reasoning_effort" field.
@@ -540,6 +574,31 @@ func ByFiveHourLimitUsd(opts ...sql.OrderTermOption) OrderOption {
 // ByDefaultValidityDays orders the results by the default_validity_days field.
 func ByDefaultValidityDays(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDefaultValidityDays, opts...).ToFunc()
+}
+
+// ByQuotaResetSourceAccountID orders the results by the quota_reset_source_account_id field.
+func ByQuotaResetSourceAccountID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaResetSourceAccountID, opts...).ToFunc()
+}
+
+// ByQuotaResetSourceAccountName orders the results by the quota_reset_source_account_name field.
+func ByQuotaResetSourceAccountName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaResetSourceAccountName, opts...).ToFunc()
+}
+
+// ByQuotaResetSourceResetAt orders the results by the quota_reset_source_reset_at field.
+func ByQuotaResetSourceResetAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaResetSourceResetAt, opts...).ToFunc()
+}
+
+// ByQuotaResetIncludeMonthly orders the results by the quota_reset_include_monthly field.
+func ByQuotaResetIncludeMonthly(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaResetIncludeMonthly, opts...).ToFunc()
+}
+
+// ByQuotaResetConfigVersion orders the results by the quota_reset_config_version field.
+func ByQuotaResetConfigVersion(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaResetConfigVersion, opts...).ToFunc()
 }
 
 // ByAllowImageGeneration orders the results by the allow_image_generation field.

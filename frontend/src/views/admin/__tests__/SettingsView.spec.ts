@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 
@@ -7,6 +7,22 @@ import enSettings from "@/i18n/locales/en/admin/settings";
 import zhCommon from "@/i18n/locales/zh/common";
 import zhSettings from "@/i18n/locales/zh/admin/settings";
 import SettingsView from "../SettingsView.vue";
+import { identityPresets, type OutboundIdentityView } from "@/api/admin/outboundIdentity";
+import { identityPolicyFixture } from "@/components/account/__tests__/identityPolicyFixture";
+import { cssPixels, installAppStyles } from "@/__tests__/appStyles";
+
+const { getOutboundIdentity, updateOutboundIdentity } = vi.hoisted(() => ({
+  getOutboundIdentity: vi.fn(), updateOutboundIdentity: vi.fn(),
+}));
+vi.mock("@/api/admin/outboundIdentity", async (original) => ({
+  ...await original<typeof import("@/api/admin/outboundIdentity")>(),
+  getOutboundIdentity, updateOutboundIdentity,
+}));
+
+function outboundIdentityFixture(): OutboundIdentityView {
+  const identities = identityPresets.map(preset => ({ preset, user_agent: `${preset}/3.9.0`, originator: preset, version: "3.9.0", source: "compiled_default", headers: {} }));
+  return { settings: { profiles: {}, defaults: {} }, presets: identities, effective: identities, declarations: [], account_policies: identityPolicyFixture() };
+}
 
 const {
   getSettings,
@@ -31,6 +47,7 @@ const {
   createProvider,
   deleteProvider,
   fetchPublicSettings,
+  clearPublicSettingsCache,
   adminSettingsFetch,
   showError,
   showSuccess,
@@ -67,6 +84,7 @@ const {
   createProvider: vi.fn(),
   deleteProvider: vi.fn(),
   fetchPublicSettings: vi.fn(),
+  clearPublicSettingsCache: vi.fn(),
   adminSettingsFetch: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
@@ -117,6 +135,7 @@ vi.mock("@/stores", () => ({
     showWarning: vi.fn(),
     showInfo: vi.fn(),
     fetchPublicSettings,
+    clearPublicSettingsCache,
   }),
 }));
 
@@ -449,7 +468,6 @@ const baseSettingsResponse = {
   min_claude_code_version: "",
   max_claude_code_version: "",
   allow_ungrouped_key_scheduling: false,
-  openai_ttft_mode: "semantic",
   min_codex_version: "",
   max_codex_version: "",
   codex_cli_only_allow_app_server_clients: false,
@@ -478,6 +496,9 @@ const baseSettingsResponse = {
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
+  payment_recharge_bonus_tiers: [],
+  payment_recharge_bonus_mode: "bonus",
+  payment_recharge_bonus_notice: "",
   payment_load_balance_strategy: "round-robin",
   payment_product_name_prefix: "",
   payment_product_name_suffix: "",
@@ -586,6 +607,18 @@ async function openGatewayTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openIdentityTab(wrapper: ReturnType<typeof mountView>) {
+  const button = wrapper.findAll("button").find(node => node.text().includes("admin.settings.tabs.identity"));
+  expect(button).toBeDefined();
+  await button!.trigger("click");
+  await flushPromises();
+}
+
+async function editClaudeIdentityVersion(wrapper: ReturnType<typeof mountView>, version: string) {
+  const editor = wrapper.get('[data-testid="outbound-identity-settings"]');
+  await editor.get('[data-identity-preset="claude"] input').setValue(version);
+}
+
 async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   const usersTabButton = wrapper
     .findAll("button")
@@ -620,6 +653,14 @@ describe("admin SettingsView email domain quota copy", () => {
 
 describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
+    getOutboundIdentity.mockReset();
+    updateOutboundIdentity.mockReset();
+    let identityResponse = outboundIdentityFixture();
+    getOutboundIdentity.mockImplementation(async () => identityResponse);
+    updateOutboundIdentity.mockImplementation(async settings => {
+      identityResponse = { ...identityResponse, settings };
+      return identityResponse;
+    });
     getSettings.mockReset();
     updateSettings.mockReset();
     getWebSearchEmulationConfig.mockReset();
@@ -640,6 +681,7 @@ describe("admin SettingsView payment visible method controls", () => {
     createProvider.mockReset();
     deleteProvider.mockReset();
     fetchPublicSettings.mockReset();
+    clearPublicSettingsCache.mockReset();
     adminSettingsFetch.mockReset();
     showError.mockReset();
     showSuccess.mockReset();
@@ -703,6 +745,130 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
+  });
+
+  it.each(["v1", "v2", "v3"])("saves monitor mode %s and invalidates old public settings before refreshing", async (savedMode) => {
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, channel_monitor_enabled: true, channel_monitor_mode: "v1" });
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      const mode = wrapper.get('[data-testid="channel-monitor-mode"]');
+      expect(mode.find('select').exists()).toBe(false);
+      expect(mode.findAll('button')).toHaveLength(3);
+      await mode.get(`[data-mode="${savedMode}"]`).trigger('click');
+      expect(mode.get(`[data-mode="${savedMode}"]`).attributes('aria-pressed')).toBe('true');
+      expect(mode.findAll('[aria-pressed="true"]')).toHaveLength(1);
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ channel_monitor_enabled: true, channel_monitor_mode: savedMode }));
+      expect(clearPublicSettingsCache).toHaveBeenCalledOnce();
+      expect(fetchPublicSettings).toHaveBeenCalledWith(true);
+      expect(clearPublicSettingsCache.mock.invocationCallOrder[0]).toBeLessThan(fetchPublicSettings.mock.invocationCallOrder[0]);
+    } finally { wrapper.unmount(); }
+  });
+
+  it("loads and saves V3 monitor mode without converting it to V1 or V2", async () => {
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, channel_monitor_enabled: true, channel_monitor_mode: "v3" });
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      const mode = wrapper.get('[data-testid="channel-monitor-mode"]');
+      expect(mode.get('[data-mode="v3"]').attributes('aria-pressed')).toBe('true');
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ channel_monitor_enabled: true, channel_monitor_mode: "v3" }));
+      expect(mode.get('[data-mode="v3"]').attributes('aria-pressed')).toBe('true');
+    } finally { wrapper.unmount(); }
+  });
+
+  it("allows switching an existing V2 configuration to V3", async () => {
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, channel_monitor_enabled: true, channel_monitor_mode: "v2" });
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      const mode = wrapper.get('[data-testid="channel-monitor-mode"]');
+      expect(mode.get('[data-mode="v2"]').attributes('aria-pressed')).toBe('true');
+      await mode.get('[data-mode="v3"]').trigger('click');
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ channel_monitor_mode: "v3" }));
+    } finally { wrapper.unmount(); }
+  });
+
+  it("saves pending identity edits after switching settings tabs", async () => {
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      await openIdentityTab(wrapper);
+      await editClaudeIdentityVersion(wrapper, "3.9.1");
+      await openGatewayTab(wrapper);
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateOutboundIdentity).toHaveBeenCalledWith(expect.objectContaining({ profiles: expect.objectContaining({ claude: expect.objectContaining({ version: "3.9.1" }) }) }));
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      expect(showSuccess).toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+
+  it("keeps pending identity edits after a failed cross-tab save and retries them", async () => {
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      await openIdentityTab(wrapper);
+      await editClaudeIdentityVersion(wrapper, "3.9.1");
+      await openGatewayTab(wrapper);
+      updateOutboundIdentity.mockRejectedValueOnce(new Error("identity save failed"));
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(showSuccess).not.toHaveBeenCalled();
+      expect(showError).toHaveBeenCalled();
+      expect(updateSettings).not.toHaveBeenCalled();
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateOutboundIdentity).toHaveBeenCalledTimes(2);
+      expect(updateOutboundIdentity.mock.calls[1][0].profiles.claude.version).toBe("3.9.1");
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      expect(showSuccess).toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+
+  it("does not rewrite unchanged identity settings after visiting the identity tab", async () => {
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      await openIdentityTab(wrapper);
+      await openGatewayTab(wrapper);
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      expect(updateOutboundIdentity).not.toHaveBeenCalled();
+      expect(showSuccess).toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+
+  it("loads and saves the open button visibility for each custom menu", async () => {
+    const menuItems = [
+      { id: "docs", label: "Docs", url: "https://example.com/docs", icon_svg: "", visibility: "user", sort_order: 0 },
+      { id: "help", label: "Help", url: "https://example.com/help", icon_svg: "", visibility: "user", sort_order: 1, hide_open_button: true },
+    ];
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, custom_menu_items: menuItems });
+    const wrapper = mountView();
+    await flushPromises();
+
+    const toggles = wrapper.findAll<HTMLInputElement>('[data-testid="custom-menu-hide-open-button"]');
+    expect(toggles.map(toggle => toggle.element.checked)).toEqual([false, true]);
+    await toggles[0].setValue(true);
+    await toggles[1].setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      custom_menu_items: [
+        { ...menuItems[0], hide_open_button: true },
+        { ...menuItems[1], hide_open_button: false },
+      ],
+    }));
+    wrapper.unmount();
   });
 
   it("submits the compact home page toggle", async () => {
@@ -1041,6 +1207,100 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("loads, edits, and saves recharge bonus tiers and the notice", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_recharge_bonus_tiers: [
+        { min_amount: 500, bonus_percent: 30 },
+        { min_amount: 100, bonus_percent: 20 },
+      ],
+      payment_recharge_bonus_notice: "满 100 送 20%",
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    // 回填按阈值升序，并渲染区间预览（首段为「不赠送」）
+    let rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    expect(rows).toHaveLength(2);
+    const minValue = (row: (typeof rows)[number]) =>
+      (row.get('[data-testid="recharge-bonus-tier-min-input"]').element as HTMLInputElement).value;
+    expect(minValue(rows[0]!)).toBe("100");
+    expect(minValue(rows[1]!)).toBe("500");
+    expect(wrapper.get('[data-testid="recharge-bonus-tier-preview"]').text()).toContain(
+      "admin.settings.payment.rechargeBonus.previewRangeNone",
+    );
+
+    await wrapper.get('[data-testid="recharge-bonus-tier-add"]').trigger("click");
+    rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    expect(rows).toHaveLength(3);
+    expect(rows[2]!.find('[data-testid="recharge-bonus-tier-incomplete"]').exists()).toBe(true);
+
+    // 与已有档位重复的阈值行内报错，改成新阈值后消失
+    await rows[2]!.get('[data-testid="recharge-bonus-tier-min-input"]').setValue("100");
+    await rows[2]!.get('[data-testid="recharge-bonus-tier-percent-input"]').setValue("25");
+    rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    expect(rows[2]!.find('[data-testid="recharge-bonus-tier-error"]').exists()).toBe(true);
+    await rows[2]!.get('[data-testid="recharge-bonus-tier-min-input"]').setValue("1000");
+    rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    expect(rows[2]!.find('[data-testid="recharge-bonus-tier-error"]').exists()).toBe(false);
+
+    // 切到折扣模式：百分比 ≥ 100 行内报错，改回 < 100 后消失
+    await wrapper.get('[data-testid="recharge-bonus-mode-discount"]').trigger("click");
+    rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    await rows[2]!.get('[data-testid="recharge-bonus-tier-percent-input"]').setValue("100");
+    rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    expect(rows[2]!.get('[data-testid="recharge-bonus-tier-error"]').text()).toContain("invalidDiscountPercent");
+    await rows[2]!.get('[data-testid="recharge-bonus-tier-percent-input"]').setValue("25");
+    rows = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]');
+    expect(rows[2]!.find('[data-testid="recharge-bonus-tier-error"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="recharge-bonus-tier-preview"]').text()).toContain(
+      "admin.settings.payment.rechargeBonus.previewRangeDiscount",
+    );
+
+    const notice = wrapper.get('[data-testid="recharge-bonus-notice-input"]');
+    expect((notice.element as HTMLTextAreaElement).value).toBe("满 100 送 20%");
+    await notice.setValue("**新活动**");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_recharge_bonus_tiers: [
+          { min_amount: 100, bonus_percent: 20 },
+          { min_amount: 500, bonus_percent: 30 },
+          { min_amount: 1000, bonus_percent: 25 },
+        ],
+        payment_recharge_bonus_mode: "discount",
+        payment_recharge_bonus_notice: "**新活动**",
+      }),
+    );
+  });
+
+  it("drops incomplete recharge bonus rows and submits an empty list when cleared", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }],
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    await wrapper.get('[data-testid="recharge-bonus-tier-remove"]').trigger("click");
+    await wrapper.get('[data-testid="recharge-bonus-tier-add"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="recharge-bonus-tier-row"]')).toHaveLength(1);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_recharge_bonus_tiers: [] }),
+    );
+  });
+
   it("links payment guidance to README sections instead of removed payment docs", async () => {
     const wrapper = mountView();
 
@@ -1362,25 +1622,14 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(payload.grok_cross_client_model_map_enabled).toBe(false);
   });
 
-  it("loads and saves the OpenAI Responses first-token metric mode", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      openai_ttft_mode: "visible",
-    });
+  it("does not offer the obsolete first-event timing mode", async () => {
     const wrapper = mountView();
-
     await flushPromises();
     await openGatewayTab(wrapper);
-
-    const modeSelect = wrapper.get('[data-testid="openai-ttft-mode"]');
-    expect((modeSelect.element as HTMLSelectElement).value).toBe("visible");
-
-    await modeSelect.setValue("semantic");
+    expect(wrapper.find('[data-testid="openai-ttft-mode"]').exists()).toBe(false);
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
-
-    const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(payload.openai_ttft_mode).toBe("semantic");
+    expect(updateSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("openai_ttft_mode");
   });
 
   it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {
@@ -1573,6 +1822,7 @@ describe("admin SettingsView wechat connect controls", () => {
     createProvider.mockReset();
     deleteProvider.mockReset();
     fetchPublicSettings.mockReset();
+    clearPublicSettingsCache.mockReset();
     adminSettingsFetch.mockReset();
     showError.mockReset();
     showSuccess.mockReset();
@@ -1800,6 +2050,12 @@ describe("admin SettingsView wechat connect controls", () => {
 });
 
 describe("admin SettingsView platform quota matrix", () => {
+  let removeStyles: () => void;
+  // Compile the real production stylesheet without treating fixture build time
+  // as a UI response SLA; keep every computed-layout assertion unchanged.
+  beforeAll(async () => { removeStyles = await installAppStyles(); }, 30000);
+  afterAll(() => removeStyles?.());
+
   beforeEach(() => {
     getSettings.mockReset();
     updateSettings.mockReset();
@@ -1819,6 +2075,7 @@ describe("admin SettingsView platform quota matrix", () => {
     createProvider.mockReset();
     deleteProvider.mockReset();
     fetchPublicSettings.mockReset();
+    clearPublicSettingsCache.mockReset();
     adminSettingsFetch.mockReset();
     showError.mockReset();
     showSuccess.mockReset();
@@ -1843,7 +2100,7 @@ describe("admin SettingsView platform quota matrix", () => {
     getProviders.mockResolvedValue({ data: [] });
   });
 
-  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 5 平台行", async () => {
+  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 6 平台行", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1856,9 +2113,73 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(html).toContain("openai");
     expect(html).toContain("gemini");
     expect(html).toContain("antigravity");
+    expect(html).toContain("typesafe");
   });
 
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 5 平台）", async () => {
+  it("全局及七种认证来源的限额表格保留一致的左右留白，并将平台名称与输入框垂直对齐", async () => {
+    // User audit: the default matrix and every signup source must have an
+    // inset of at least 12px; header and input cells share the same inset.
+    const wrapper = mountView();
+    document.body.appendChild(wrapper.element);
+    try {
+      await flushPromises();
+      await openUsersTab(wrapper);
+      for (const source of ["email", "linuxdo", "oidc", "wechat", "github", "google", "dingtalk"]) {
+        await wrapper.get(`[data-testid="auth-source-${source}-enabled"]`).setValue(true);
+      }
+      const tables = wrapper.findAll("table").filter(table => table.find("thead th").text() === "平台");
+      expect(tables).toHaveLength(8);
+      for (const table of tables) {
+        const headers = table.findAll("thead th");
+        expect(headers.map(cell => cell.text())).toEqual(["平台", "日限额 (USD)", "周限额 (USD)", "月限额 (USD, 30天滚动)"]);
+        for (const row of table.findAll("tbody tr")) {
+          expect(getComputedStyle(row.element).verticalAlign).toBe("middle");
+          const cells = row.findAll("td");
+          expect(cells).toHaveLength(4);
+          cells.forEach((cell, index) => {
+            const headerStyle = getComputedStyle(headers[index].element);
+            const cellStyle = getComputedStyle(cell.element);
+            for (const side of ["paddingLeft", "paddingRight"] as const) {
+              expect(cssPixels(cellStyle[side])).toBeGreaterThanOrEqual(12);
+              expect(cssPixels(headerStyle[side])).toBe(cssPixels(cellStyle[side]));
+            }
+          });
+        }
+      }
+    } finally { wrapper.unmount(); }
+  });
+
+  it("调整表格后七种认证来源仍分别保存日周月限额，0 与留空保持不同语义", async () => {
+    const sources = ["email", "linuxdo", "oidc", "wechat", "github", "google", "dingtalk"];
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      await openUsersTab(wrapper);
+      for (const [index, source] of sources.entries()) {
+        await wrapper.get(`[data-testid="auth-source-${source}-enabled"]`).setValue(true);
+        const table = wrapper.get(`[data-testid="auth-source-${source}-panel"] table`);
+        const row = table.findAll("tbody tr").find(row => row.get("td").text() === "openai");
+        expect(row).toBeDefined();
+        const inputs = row!.findAll('input[type="number"]');
+        expect(inputs).toHaveLength(3);
+        await inputs[0].setValue(String(index + 1.25));
+        await inputs[1].setValue("0");
+        await inputs[2].setValue("");
+      }
+      await wrapper.get("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      const payload = updateSettings.mock.calls[0][0];
+      sources.forEach((source, index) => {
+        expect(payload[`auth_source_default_${source}_platform_quotas`].openai).toEqual({
+          daily: index + 1.25, weekly: 0, monthly: null,
+        });
+      });
+      expect(payload.default_platform_quotas.openai).toEqual({ daily: null, weekly: 12.5, monthly: null });
+    } finally { wrapper.unmount(); }
+  });
+
+  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 6 平台）", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openUsersTab(wrapper);
@@ -1874,7 +2195,7 @@ describe("admin SettingsView platform quota matrix", () => {
     // 应携带嵌套对象，而非扁平字段
     expect(payload).toHaveProperty("default_platform_quotas");
     const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "gemini", "antigravity", "grok"];
+    const platforms = ["anthropic", "openai", "gemini", "antigravity", "grok", "typesafe"];
     for (const p of platforms) {
       expect(quotas).toHaveProperty(p);
       const pq = quotas[p] as Record<string, unknown>;
@@ -1888,7 +2209,7 @@ describe("admin SettingsView platform quota matrix", () => {
     expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
   });
 
-  it("加载后 form.default_platform_quotas 含全 5 平台，从嵌套 JSON 正确读取数值", async () => {
+  it("加载后 form.default_platform_quotas 含全 6 平台，从嵌套 JSON 正确读取数值", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       default_platform_quotas: {
@@ -1913,6 +2234,7 @@ describe("admin SettingsView platform quota matrix", () => {
     // 缺失平台应补全为 null
     expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
     expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
+    expect(quotas["typesafe"]).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {

@@ -26,6 +26,10 @@
         </div>
       </div>
 
+      <div v-else-if="resellerInvitationBlocked" class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-center text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300" role="status">
+        {{ resellerInvitationMessage }}
+      </div>
+
       <!-- Registration Form -->
       <form v-else @submit.prevent="handleRegister" class="space-y-5">
         <!-- Email Input -->
@@ -87,10 +91,43 @@
           </p>
         </div>
 
+        <!-- Confirm Password Input -->
+        <div>
+          <label for="confirmPassword" class="input-label">
+            {{ t('auth.confirmPassword') }}
+          </label>
+          <div class="relative">
+            <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+              <Icon name="lock" size="md" class="text-gray-400 dark:text-dark-500" />
+            </div>
+            <input
+              id="confirmPassword"
+              v-model="confirmPassword"
+              :type="showConfirmPassword ? 'text' : 'password'"
+              required
+              autocomplete="new-password"
+              :disabled="registrationActionDisabled"
+              class="input pl-11 pr-11"
+              :class="{ 'input-error': errors.confirmPassword }"
+              :placeholder="t('auth.confirmPasswordPlaceholder')"
+            />
+            <button
+              type="button"
+              :disabled="registrationActionDisabled"
+              @click="showConfirmPassword = !showConfirmPassword"
+              class="absolute inset-y-0 right-0 flex items-center pr-3.5 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-dark-300"
+            >
+              <Icon v-if="showConfirmPassword" name="eyeOff" size="md" />
+              <Icon v-else name="eye" size="md" />
+            </button>
+          </div>
+        </div>
+
         <!-- Invitation Code Input (Required when enabled) -->
-        <div v-if="invitationCodeEnabled">
+        <div v-if="!resellerInvitationRequired && (invitationCodeEnabled || affiliateEnabled)">
           <label for="invitation_code" class="input-label">
             {{ t('auth.invitationCodeLabel') }}
+            <span v-if="!invitationCodeEnabled" class="ml-1 text-xs font-normal text-gray-400">({{ t('common.optional') }})</span>
           </label>
           <div class="relative">
             <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
@@ -132,27 +169,6 @@
               </span>
             </div>
           </transition>
-        </div>
-
-        <!-- Affiliate Invitation Code Input (Optional) -->
-        <div v-else-if="affiliateEnabled" data-testid="affiliate-invitation-field">
-          <label for="affiliate_code" class="input-label">
-            {{ t('auth.invitationCodeLabel') }}
-            <span class="ml-1 text-xs font-normal text-gray-400 dark:text-dark-500">({{ t('common.optional') }})</span>
-          </label>
-          <div class="relative">
-            <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-              <Icon name="key" size="md" class="text-gray-400 dark:text-dark-500" />
-            </div>
-            <input
-              id="affiliate_code"
-              v-model="formData.aff_code"
-              type="text"
-              :disabled="registrationActionDisabled"
-              class="input pl-11"
-              :placeholder="t('auth.invitationCodePlaceholder')"
-            />
-          </div>
         </div>
 
         <!-- Promo Code Input (Optional) -->
@@ -272,7 +288,7 @@
 
       </form>
 
-      <div v-if="showOAuthLogin" class="space-y-3 pt-1">
+      <div v-if="showOAuthLogin && !resellerInvitationBlocked" class="space-y-3 pt-1">
         <div class="flex items-center gap-3">
           <div class="h-px flex-1 bg-gray-200 dark:bg-dark-700"></div>
           <span class="text-xs text-gray-500 dark:text-dark-400">
@@ -283,7 +299,7 @@
 
         <EmailOAuthButtons
           :disabled="registrationActionDisabled"
-          :aff-code="formData.aff_code"
+          :aff-code="formData.invitation_code"
           :promo-code="formData.promo_code"
           :github-enabled="githubOAuthEnabled"
           :google-enabled="googleOAuthEnabled"
@@ -294,7 +310,7 @@
         <LinuxDoOAuthSection
           v-if="linuxdoOAuthEnabled"
           :disabled="registrationActionDisabled"
-          :aff-code="formData.aff_code"
+          :aff-code="formData.invitation_code"
           :promo-code="formData.promo_code"
           :show-divider="false"
           @start="handleOAuthStart"
@@ -302,7 +318,7 @@
         <WechatOAuthSection
           v-if="wechatOAuthEnabled"
           :disabled="registrationActionDisabled"
-          :aff-code="formData.aff_code"
+          :aff-code="formData.invitation_code"
           :show-divider="false"
           @start="handleOAuthStart"
         />
@@ -310,7 +326,7 @@
           v-if="oidcOAuthEnabled"
           :disabled="registrationActionDisabled"
           :provider-name="oidcOAuthProviderName"
-          :aff-code="formData.aff_code"
+          :aff-code="formData.invitation_code"
           :show-divider="false"
           @start="handleOAuthStart"
         />
@@ -363,7 +379,7 @@ import {
 } from '@/utils/registrationEmailPolicy'
 import {
   clearAffiliateReferralCode,
-  loadAffiliateReferralCode,
+  normalizeOAuthAffiliateCode,
   resolveAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
 import type { LoginAgreementDocument } from '@/types'
@@ -384,12 +400,28 @@ const isLoading = ref<boolean>(false)
 const settingsLoaded = ref<boolean>(false)
 const errorMessage = ref<string>('')
 const showPassword = ref<boolean>(false)
+const showConfirmPassword = ref<boolean>(false)
+const confirmPassword = ref('')
 
 // Public settings
 const registrationEnabled = ref<boolean>(true)
 const emailVerifyEnabled = ref<boolean>(false)
-const promoCodeEnabled = ref<boolean>(true)
+// Public settings are injected into the app store before Vue mounts. Use that
+// value for the first render so a disabled promo-code field never flashes
+// while the async settings request is still in flight. If injection is
+// unavailable, fail closed until the request explicitly enables the field.
+const promoCodeEnabled = ref<boolean>(
+  appStore.cachedPublicSettings?.promo_code_enabled === true
+)
 const invitationCodeEnabled = ref<boolean>(false)
+const resellerInvitationRequired = ref(appStore.cachedPublicSettings?.reseller_invitation_required === true)
+const resellerInvitationBlocked = computed(() =>
+  resellerInvitationRequired.value && (!normalizeOAuthAffiliateCode(route.query.reseller) || !invitationValidation.valid)
+)
+const resellerInvitationMessage = computed(() => {
+  if (!normalizeOAuthAffiliateCode(route.query.reseller)) return t('auth.resellerInvitationRequired')
+  return invitationValidating.value ? t('auth.invitationCodeValidating') : t('auth.resellerInvitationInvalid')
+})
 const affiliateEnabled = ref<boolean>(false)
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
@@ -462,13 +494,13 @@ const formData = reactive({
   email: '',
   password: '',
   promo_code: '',
-  invitation_code: '',
-  aff_code: ''
+  invitation_code: ''
 })
 
 const errors = reactive({
   email: '',
   password: '',
+  confirmPassword: '',
   turnstile: '',
   invitation_code: ''
 })
@@ -476,6 +508,7 @@ const errors = reactive({
 const validationToastMessage = computed(() =>
   errors.email ||
   errors.password ||
+  errors.confirmPassword ||
   (invitationValidation.invalid ? invitationValidation.message : '') ||
   errors.invitation_code ||
   (promoValidation.invalid ? promoValidation.message : '') ||
@@ -497,7 +530,7 @@ const agreementGateActive = computed(
 )
 
 const registrationActionDisabled = computed(
-  () => isLoading.value || !settingsLoaded.value || agreementGateActive.value
+  () => isLoading.value || !settingsLoaded.value || agreementGateActive.value || resellerInvitationBlocked.value
 )
 
 watch(validationToastMessage, (value, previousValue) => {
@@ -507,10 +540,13 @@ watch(validationToastMessage, (value, previousValue) => {
 })
 
 function syncAffiliateReferralCode(): string {
-  const code = resolveAffiliateReferralCode(route.query.aff, route.query.aff_code)
-  if (code) {
-    formData.aff_code = code
+  if (resellerInvitationRequired.value) {
+    const code = normalizeOAuthAffiliateCode(route.query.reseller)
+    formData.invitation_code = code
+    return code
   }
+  const code = resolveAffiliateReferralCode(route.query.invitation_code, route.query.reseller, route.query.aff, route.query.aff_code)
+  if (code) formData.invitation_code = code
   return code
 }
 
@@ -525,6 +561,7 @@ onMounted(async () => {
     emailVerifyEnabled.value = settings.email_verify_enabled
     promoCodeEnabled.value = settings.promo_code_enabled
     invitationCodeEnabled.value = settings.invitation_code_enabled
+    resellerInvitationRequired.value = settings.reseller_invitation_required === true
     affiliateEnabled.value = settings.affiliate_enabled
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
@@ -557,7 +594,8 @@ onMounted(async () => {
         await validatePromoCodeDebounced(promoParam)
       }
     }
-    syncAffiliateReferralCode()
+    const invitation = syncAffiliateReferralCode()
+    if (resellerInvitationRequired.value && invitation) await validateInvitationCodeDebounced(invitation)
   } catch (error) {
     console.error('Failed to load public settings:', error)
     loginAgreementEnabled.value = false
@@ -568,9 +606,12 @@ onMounted(async () => {
 })
 
 watch(
-  () => [route.query.aff, route.query.aff_code],
-  () => {
-    syncAffiliateReferralCode()
+  () => [route.query.invitation_code, route.query.reseller, route.query.aff, route.query.aff_code],
+  async () => {
+    invitationValidation.valid = false
+    invitationValidation.invalid = false
+    const invitation = syncAffiliateReferralCode()
+    if (resellerInvitationRequired.value && invitation) await validateInvitationCodeDebounced(invitation)
   }
 )
 
@@ -884,6 +925,7 @@ function validateForm(): boolean {
   // Reset errors
   errors.email = ''
   errors.password = ''
+  errors.confirmPassword = ''
   errors.turnstile = ''
   errors.invitation_code = ''
 
@@ -922,6 +964,15 @@ function validateForm(): boolean {
     isValid = false
   }
 
+  // Confirm password validation
+  if (!confirmPassword.value) {
+    errors.confirmPassword = t('auth.confirmPasswordRequired')
+    isValid = false
+  } else if (formData.password !== confirmPassword.value) {
+    errors.confirmPassword = t('auth.passwordsDoNotMatch')
+    isValid = false
+  }
+
   // Invitation code validation (required when enabled)
   if (invitationCodeEnabled.value) {
     if (!formData.invitation_code.trim()) {
@@ -942,6 +993,7 @@ function validateForm(): boolean {
 // ==================== Form Handlers ====================
 
 async function handleRegister(): Promise<void> {
+  if (registrationActionDisabled.value) return
   // Clear previous error
   errorMessage.value = ''
 
@@ -965,7 +1017,7 @@ async function handleRegister(): Promise<void> {
   }
 
   // Check invitation code validation status (if enabled and code provided)
-  if (invitationCodeEnabled.value) {
+  if (formData.invitation_code.trim()) {
     // If still validating, wait
     if (invitationValidating.value) {
       errorMessage.value = t('auth.invitationCodeValidating')
@@ -995,11 +1047,6 @@ async function handleRegister(): Promise<void> {
   isLoading.value = true
 
   try {
-    const affCode = formData.aff_code.trim() || loadAffiliateReferralCode()
-    if (affCode) {
-      formData.aff_code = affCode
-    }
-
     // If email verification is enabled, redirect to verification page
     if (emailVerifyEnabled.value) {
       // Store registration data in sessionStorage
@@ -1013,8 +1060,7 @@ async function handleRegister(): Promise<void> {
           tencent_captcha_ticket: tencentCaptchaEnabled.value ? turnstileToken.value : undefined,
           tencent_captcha_randstr: tencentCaptchaEnabled.value ? tencentCaptchaRandstr.value : undefined,
           promo_code: formData.promo_code || undefined,
-          invitation_code: formData.invitation_code || undefined,
-          ...(affCode ? { aff_code: affCode } : {})
+          invitation_code: formData.invitation_code.trim() || undefined
         })
       )
 
@@ -1032,8 +1078,7 @@ async function handleRegister(): Promise<void> {
       tencent_captcha_ticket: tencentCaptchaEnabled.value ? turnstileToken.value : undefined,
       tencent_captcha_randstr: tencentCaptchaEnabled.value ? tencentCaptchaRandstr.value : undefined,
       promo_code: formData.promo_code || undefined,
-      invitation_code: formData.invitation_code || undefined,
-      ...(affCode ? { aff_code: affCode } : {})
+      invitation_code: formData.invitation_code.trim() || undefined
     })
     clearAffiliateReferralCode()
 

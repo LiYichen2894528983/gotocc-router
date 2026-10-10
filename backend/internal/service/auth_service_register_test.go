@@ -180,8 +180,29 @@ func (s *emailCacheStub) SetVerificationCode(ctx context.Context, email string, 
 	return nil
 }
 
-func (s *emailCacheStub) DeleteVerificationCode(ctx context.Context, email string) error {
-	return nil
+func (s *emailCacheStub) ReserveVerificationCodeAttempt(_ context.Context, _ string, generation string) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	if s.data == nil || s.data.Generation != generation {
+		return 0, ErrVerifyCodeMissing
+	}
+	if s.data.Attempts >= MaxVerificationCodeAttempts {
+		return 0, ErrVerifyCodeExhausted
+	}
+	s.data.Attempts++
+	return s.data.Attempts, nil
+}
+
+func (s *emailCacheStub) ConsumeVerificationCode(_ context.Context, _ string, generation string) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	if s.data == nil || s.data.Generation != generation {
+		return false, nil
+	}
+	s.data = nil
+	return true, nil
 }
 
 func (s *emailCacheStub) GetNotifyVerifyCode(ctx context.Context, email string) (*VerificationCodeData, error) {
@@ -192,8 +213,12 @@ func (s *emailCacheStub) SetNotifyVerifyCode(ctx context.Context, email string, 
 	return nil
 }
 
-func (s *emailCacheStub) DeleteNotifyVerifyCode(ctx context.Context, email string) error {
-	return nil
+func (s *emailCacheStub) ReserveNotifyVerifyCodeAttempt(context.Context, string, string) (int, error) {
+	return 0, ErrVerifyCodeMissing
+}
+
+func (s *emailCacheStub) ConsumeNotifyVerifyCode(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 
 func (s *emailCacheStub) GetPasswordResetToken(ctx context.Context, email string) (*PasswordResetTokenData, error) {
@@ -298,17 +323,27 @@ func TestAuthService_Register_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.Len(t, quotaRepo.bulkInsertCalls, 1)
 
 	records := quotaRepo.bulkInsertCalls[0]
-	var openaiRecord *UserPlatformQuotaRecord
-	for i := range records {
-		if records[i].Platform == "openai" {
-			openaiRecord = &records[i]
-			break
-		}
-	}
-	require.NotNil(t, openaiRecord, "expected openai platform record")
+	require.Len(t, records, 1, "only platforms with a configured limit get a row")
+	openaiRecord := records[0]
+	require.Equal(t, "openai", openaiRecord.Platform)
 	require.Equal(t, int64(77), openaiRecord.UserID)
 	require.NotNil(t, openaiRecord.WeeklyLimitUSD)
 	require.InDelta(t, 12.34, *openaiRecord.WeeklyLimitUSD, 0.0001)
+}
+
+func TestAuthService_Register_NoDefaultQuotasSkipsSnapshot(t *testing.T) {
+	repo := &userRepoStub{nextID: 78}
+	quotaRepo := &userPlatformQuotaRepoStub{}
+
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil, quotaRepo)
+
+	_, user, err := service.Register(context.Background(), "newuser2@test.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+
+	require.Empty(t, quotaRepo.bulkInsertCalls, "no configured default limit must not create quota rows")
 }
 
 func TestAuthService_Register_DoesNotSnapshotOnDisabled(t *testing.T) {
@@ -999,4 +1034,8 @@ func TestCanBypassRegistrationDisabledForOAuth(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func (s *emailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
 }

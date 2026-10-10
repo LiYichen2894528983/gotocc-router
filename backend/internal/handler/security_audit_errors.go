@@ -15,6 +15,7 @@ import (
 )
 
 func (h *OpenAIGatewayHandler) openAISecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
+	markOpsSecurityAuditDecision(c, decision)
 	if decision == nil {
 		return
 	}
@@ -32,6 +33,7 @@ func (h *OpenAIGatewayHandler) openAISecurityAuditError(c *gin.Context, decision
 }
 
 func (h *GatewayHandler) openAISecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
+	markOpsSecurityAuditDecision(c, decision)
 	if decision == nil {
 		return
 	}
@@ -49,6 +51,7 @@ func (h *GatewayHandler) openAISecurityAuditError(c *gin.Context, decision *secu
 }
 
 func (h *GatewayHandler) responsesSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
+	markOpsSecurityAuditDecision(c, decision)
 	if decision == nil {
 		return
 	}
@@ -62,6 +65,7 @@ func (h *GatewayHandler) responsesSecurityAuditError(c *gin.Context, decision *s
 }
 
 func (h *GatewayHandler) anthropicSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
+	markOpsSecurityAuditDecision(c, decision)
 	if decision == nil {
 		return
 	}
@@ -79,6 +83,7 @@ func (h *GatewayHandler) anthropicSecurityAuditError(c *gin.Context, decision *s
 }
 
 func (h *OpenAIGatewayHandler) anthropicSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
+	markOpsSecurityAuditDecision(c, decision)
 	if decision == nil {
 		return
 	}
@@ -96,6 +101,7 @@ func (h *OpenAIGatewayHandler) anthropicSecurityAuditError(c *gin.Context, decis
 }
 
 func googleSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
+	markOpsSecurityAuditDecision(c, decision)
 	if decision == nil {
 		return
 	}
@@ -122,7 +128,7 @@ func googleSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) 
 	}})
 }
 
-func writeSecurityAuditWSError(ctx context.Context, conn *coderws.Conn, decision *securityaudit.Decision) {
+func writeSecurityAuditWSError(ctx context.Context, conn service.OpenAIWSIngressConn, decision *securityaudit.Decision) {
 	if conn == nil || decision == nil {
 		return
 	}

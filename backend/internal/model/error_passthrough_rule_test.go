@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package model
 
 import (
@@ -16,5 +18,9 @@ func TestAllPlatformsIncludesEveryConcretePlatform(t *testing.T) {
 		"kimi",
 		"zhipu",
 		"deepseek",
+		"minimax",
+		"stepfun",
+		"opencode_go",
+		"typesafe",
 	}, AllPlatforms())
 }

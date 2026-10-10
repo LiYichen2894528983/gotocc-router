@@ -1,6 +1,11 @@
-# Asynchronous Image Tasks
+# Asynchronous and Batch Image Tasks
 
 Asynchronous image tasks let clients submit long-running OpenAI-compatible image requests without keeping one HTTP connection open. This avoids proxy/CDN response timeouts such as Cloudflare 524 while preserving the existing image routing, billing, moderation, concurrency, and failover behavior.
+
+OpenAI/Grok tasks use `/images/tasks` with S3-compatible output storage. Gemini
+and Vertex provider batches use `/images/batches`, described in
+[Gemini and Vertex batches](#gemini-and-vertex-batches) below, with separate
+feature gates, provider storage and billing settlement.
 
 ## Endpoints
 
@@ -13,10 +18,9 @@ GET  /v1/images/tasks
 GET  /v1/images/tasks/{task_id}
 GET  /v1/images/tasks/{task_id}/download
 DELETE /v1/images/tasks/{task_id}
-GET  /v1/images/objects/{object_id}/url
 ```
 
-Each endpoint also has the existing no-`/v1` alias under `/images/...`.
+Every endpoint also has the equivalent no-prefix `/images/...` alias.
 
 Only OpenAI and Grok groups are supported. Requests use the same JSON or multipart payload as the corresponding synchronous endpoint. Streaming image requests are rejected because a polled task returns one final JSON result.
 
@@ -58,7 +62,7 @@ image_storage:
   max_download_bytes: 33554432     # cap when re-hosting an upstream image URL (32MB)
 ```
 
-When a task completes, each generated image is uploaded to the bucket and the result is rewritten to a compact form: `data[].url` points at the stored object (a permanent `public_base_url/key` link, or a time-limited presigned URL), while `data[].object_id` and `data[].url_expires_at` identify the durable reference; `b64_json` is removed. Only this small JSON and the private exact object keys needed for ZIP downloads are stored in Redis. PostgreSQL `image_objects` stores ownership and object metadata, never image bytes or base64. Storage keys remain server-private and are not exposed in task or URL-renewal responses. If an upload or ownership write fails, the task is marked `failed` rather than persisting the raw base64 or returning an unowned object.
+When a task completes, each generated image is uploaded to the bucket and the result is rewritten to a compact form: `data[].url` points at the stored object (a permanent `public_base_url/key` link, or a time-limited presigned URL) and `b64_json` is removed. Only this small JSON and the private exact object keys needed for ZIP downloads are stored in Redis. The object keys are not exposed in the public task response. If an upload fails, the task is marked `failed` rather than persisting the raw base64.
 
 To support a different vendor beyond the S3-compatible client, implement the `service.ImageStorage` interface (`Save(ctx, key, contentType, data) (url, error)`) and provide it in place of the S3 implementation.
 
@@ -141,11 +145,7 @@ On success, `result` mirrors the synchronous image API body, except each image h
   "image_url": "https://...",
   "result": {
     "created": 1784092923,
-    "data": [{
-      "object_id": "imgobj_0123456789abcdef",
-      "url": "https://...",
-      "url_expires_at": 1784179323
-    }]
+    "data": [{"url": "https://..."}]
   },
   "created_at": 1784092800,
   "completed_at": 1784092923,
@@ -203,31 +203,139 @@ The task-page API Key filter continues to show every non-disabled key, including
 
 Deleting a task record never scans or deletes S3-compatible object storage. In particular, no object key is reconstructed from the active prefix. Object lifecycle and cleanup remain the responsibility of the configured bucket policy.
 
-## Durable object URLs
+## Gemini and Vertex batches
 
-Task polling, task history, and ZIP download stay scoped to the user and the
-API key that submitted the task. Durable object URL renewal uses a different,
-intentional boundary: after a completed result supplies an `object_id`, any
-other active API key belonging to the same user may request a fresh URL:
+Batch generation supports `gemini_api` (Gemini API-key accounts and JSONL file
+batches) and `vertex` (Gemini service-account accounts, Vertex
+`BatchPredictionJob` and managed GCS JSONL). PostgreSQL is authoritative;
+Redis supplies queue wakeups, retries, locks and download limits. Provider
+filenames, job names, storage paths, signed URLs and credentials are private.
+Image and ZIP downloads are proxied through Sub2API Plus.
 
-```bash
-curl https://api.example.com/v1/images/objects/imgobj_0123456789abcdef/url \
-  -H 'Authorization: Bearer sk-...'
+### Batch API
+
+```text
+POST   /v1/images/batches
+GET    /v1/images/batches
+GET    /v1/images/batches/models
+GET    /v1/images/batches/{id}
+GET    /v1/images/batches/{id}/items
+GET    /v1/images/batches/{id}/items/{custom_id}/content
+GET    /v1/images/batches/{id}/download
+POST   /v1/images/batches/{id}/cancel
+DELETE /v1/images/batches/{id}
+DELETE /v1/images/batches/{id}/outputs
 ```
 
-The server looks up the object by `object_id` and authenticated user, then
-signs the server-owned `storage_key`. Clients cannot supply an arbitrary object
-key. Unknown objects and objects owned by another user both return `404`.
-Disabled keys, inactive users, IP restrictions, and group restrictions still
-apply. This read is not billed and remains available when generation consumed
-the key's remaining quota.
+Authenticate with a Sub2API Plus API key. Every job read, item, download,
+cancellation and deletion is scoped to both its user and submitting API key.
+The model list uses eligible accounts in the key's group, available pricing and
+the group model allowlist; listing a model does not reserve provider capacity.
 
-The built-in async-image page renews a missing, expired, or soon-to-expire
-signed URL before rendering it. It uses the currently selected manageable API
-key, deduplicates repeated object IDs, and never falls back to a known-expired
-URL when renewal fails.
+Submit JSON, optionally with `Idempotency-Key`:
 
-`GET /v1/images/tasks` returns the submitting key's compact PostgreSQL history
-with optional `status`, `limit`, and `offset` query parameters. `GET
-/v1/images/tasks/{task_id}/download` streams a bounded ZIP assembled from
-server-owned object keys; it never fetches a client-supplied URL.
+```json
+{
+  "model": "gemini-2.5-flash-image",
+  "provider": "gemini_api",
+  "items": [
+    {"custom_id": "cover", "prompt": "A winter lighthouse", "output_count": 2}
+  ],
+  "image_size": "1K",
+  "response_mime_type": "image/png"
+}
+```
+
+Submission returns the public batch object with HTTP 200. It includes `id`,
+`object: image.batch`, `status`, model/provider, item/success/failure counts,
+estimated/actual cost and lifecycle timestamps. Reusing an idempotency key with
+the same normalized payload returns its job; a changed payload is a conflict.
+Optional `task_name` labels the job; `parent_batch_id` links an owner-scoped
+retry to its original batch. Lists support `status`, `task_name`, `downloaded`,
+`from`, `to`, `limit` and `cursor`; item lists support `status`, `limit` and
+`cursor`. Item content accepts a zero-based `image_index`.
+
+`output_count` defaults to 1 and expands each item into separate provider JSONL
+requests with IDs such as `cover_01` and `cover_02`. These counts and limits are
+applied after expansion:
+
+| Limit | Current default |
+| --- | --- |
+| Outputs per original item / per batch | 4 / 200 |
+| Reference images per Flash / Pro image item | 3 / 14 |
+| Reference attachments per batch | 1,000, counting repeats |
+| Decoded inline reference bytes per batch | 128 MiB, counting repeats |
+| ZIP items / bytes per download | 200 / 512 MiB |
+| Download duration / concurrent downloads per user | 600 seconds / 1 |
+
+Split larger workloads before submission. Per-item optional `reference_images`
+entries accept `id`, `type`, `mime_type` and exactly one of `data` (base64
+without a data-URL prefix) or `file_uri` (an internal `gs://` reference).
+Supported MIME types are PNG, JPEG and WebP. Current request validation accepts
+only `1K`/default image size; `2K` and `4K` are rejected.
+
+Public states are `queued` (internal created/uploading/submitted), `running`,
+`processing_results` (indexing), `settling`, `completed`, `failed`, `cancelled`
+and `output_deleted`. Record deletion is allowed only after processing ends;
+it hides the record from the user view without replacing provider cleanup or
+billing. Output deletion is separate and requires completed results. Manual
+or TTL output cleanup changes completed jobs to `output_deleted`; later
+downloads return `410 BATCH_IMAGE_OUTPUT_DELETED`.
+
+### Enablement and configuration
+
+Enable Google-side APIs and billing/prepayment first. For Vertex, configure a
+fixed managed bucket and grant the runtime and Vertex service agent the required
+bucket permissions. Sub2API Plus switches do not grant Google-side access.
+
+Enable `batch_image.enabled` (`BATCH_IMAGE_ENABLED`), then image generation and
+`allow_batch_image_generation` on the intended **Gemini** group. Enable
+`batch_image.queue_enabled` for Redis workers to poll/index/settle accepted
+jobs. Both switches default to false. Workers reserve specific jobs from Redis;
+they do not scan PostgreSQL as a polling queue. Turning workers off is separate
+from turning admission off.
+
+The `batch_image` configuration also owns these defaults:
+
+| Settings | Defaults |
+| --- | --- |
+| `max_items_per_job_default` / `max_items_per_job_trial` | 200 / 50 |
+| `max_prompt_chars_per_item` | 8,000 |
+| `default_response_mime_type` / `default_image_size` | `image/png` / `1K` |
+| `input_retention_after_terminal_hours` | 24 |
+| `output_retention_after_terminal_hours` / `output_retention_max_days` | 72 hours / 7 days |
+| `cleanup_interval_minutes` / `cleanup_batch_size` | 30 / 100 |
+| `job_lock_ttl_seconds` / `stale_active_after_seconds` | 300 / 600 |
+| `default_requeue_delay_seconds` / `error_retry_delay_seconds` | 30 / 60 |
+| `vertex_enabled` / `vertex_location` | false / `global` |
+| `vertex_managed_gcs_prefix` | `batch-image/{env}/{batch_id}` |
+
+Set `vertex_project_id` and `vertex_managed_gcs_bucket` when using Vertex.
+Complete queue keys, limits, retention and provider defaults are maintained in
+[`BatchImageConfig` and its defaults](../backend/internal/config/config.go).
+Configure bucket lifecycle/soft delete deliberately to avoid storage retained
+after application cleanup. The compatibility `x-goog-api-key` header expects a
+Sub2API Plus key, not a plain Google key.
+
+### Billing and security
+
+Admission snapshots the output-image price and applicable multipliers, estimates
+cost and reserves a hold. Settlement follows indexing and charges only successful
+images against that snapshot. Reference-image input may incur provider costs,
+but there is no separate user-facing reference surcharge. Failed items are not
+charged. Settlement uses `batch_image_settlement:{batch_id}` and is idempotent;
+bounded settlement retries release the remaining hold through the idempotent
+release path on final failure. Pricing is operator-configured; example amounts
+are not a production price guarantee.
+
+Submission retains the canonical ingress audit before account selection,
+holds and provider writes. Provider requests retain the credential-owner
+identity and signing rules in [Outbound Identity](OUTBOUND_IDENTITY.md).
+Provider cleanup uses server-generated refs and prefix-safe deletion only.
+Public responses and logs never contain provider credentials, service-account
+JSON or image base64; PostgreSQL stores metadata, not image bytes.
+
+Official setup references: [Gemini API keys](https://ai.google.dev/gemini-api/docs/api-key),
+[Gemini Batch API](https://ai.google.dev/gemini-api/docs/batch-api),
+[Gemini image generation](https://ai.google.dev/gemini-api/docs/image-generation)
+and [Vertex batch inference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/batch-inference).

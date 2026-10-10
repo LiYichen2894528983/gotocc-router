@@ -9,12 +9,62 @@ derives the OCI image tag by preserving the leading `v` and replacing only
 `+` with `-`.
 
 ```text
-Git/GitHub: v0.2.0+custom.004
-GHCR:       ghcr.io/skyqingname/sub2api-plus:v0.2.0-custom.004
+Git/GitHub: v0.2.14+custom.002
+GHCR:       ghcr.io/skyqingname/sub2api-plus:v0.2.14-custom.002
 ```
 
 Pin the GHCR version tag for reproducible deployments. See
 [`UPSTREAM.md`](../UPSTREAM.md) for iteration and upstream-baseline rules.
+
+## Balance reservations and API-key creation limits
+
+The v0.2.11 source integration adds the following configuration to
+`config.example.yaml`. Nested YAML keys also map to uppercase environment
+names with underscores, through the existing configuration loader. Supply
+those environment values to the application process/container when using
+environment configuration.
+
+| YAML key | Environment variable | Default |
+| --- | --- | --- |
+| `api_key_create.max_active_per_user` | `API_KEY_CREATE_MAX_ACTIVE_PER_USER` | `200` |
+| `api_key_create.max_per_user_per_hour` | `API_KEY_CREATE_MAX_PER_USER_PER_HOUR` | `60` |
+| `billing.inflight_reservation.enabled` | `BILLING_INFLIGHT_RESERVATION_ENABLED` | `true` |
+| `billing.inflight_reservation.ttl_seconds` | `BILLING_INFLIGHT_RESERVATION_TTL_SECONDS` | `900` |
+| `billing.inflight_reservation.default_max_tokens` | `BILLING_INFLIGHT_RESERVATION_DEFAULT_MAX_TOKENS` | `8192` |
+| `billing.inflight_reservation.max_output_tokens` | `BILLING_INFLIGHT_RESERVATION_MAX_OUTPUT_TOKENS` | `128000` |
+| `billing.inflight_reservation.max_input_tokens` | `BILLING_INFLIGHT_RESERVATION_MAX_INPUT_TOKENS` | `200000` |
+| `billing.inflight_reservation.max_reservation_usd` | `BILLING_INFLIGHT_RESERVATION_MAX_RESERVATION_USD` | `0` (no dollar cap) |
+| `billing.inflight_reservation.fail_closed_on_unpriced` | `BILLING_INFLIGHT_RESERVATION_FAIL_CLOSED_ON_UNPRICED` | `false` |
+
+Creation limits cover generated and custom keys. The active count includes
+non-deleted keys; deleting a key frees that slot, but never refunds the
+fixed-window creation counter. Zero disables each creation limit separately.
+Count exhaustion returns `API_KEY_COUNT_EXCEEDED` (403); frequency exhaustion
+returns `API_KEY_CREATE_RATE_LIMITED` (429). Redis failure does not block key
+creation through the frequency limit.
+
+Balance reservations are an admission estimate, not a billing charge or a
+guaranteed spending cap. The first in-flight request is admitted after the
+ordinary balance check; later concurrent requests compare estimated cost with
+cached balance minus reservations. Text estimates use input bytes and requested
+output tokens, with the configured caps. The default output estimate applies
+when no token limit is specified. Image, video, HTTP voice and search paths use
+their billing units. Redis failure and missing cache capabilities fail open;
+unpriced requests fail open unless explicitly configured otherwise.
+
+Reservations renew while the handler is active and remain referenced by queued
+billing tasks until the cached balance deduction completes. Process failure or
+abandoned work is bounded by the TTL. A failed synchronous cache deduction can
+fall back to deferred deduction and weakens the admission guarantee. Simple
+mode and subscription requests are excluded. Responses WebSocket sessions
+reserve after first-turn audit and retain per-turn audit/billing checks. Grok
+Realtime does not add the upstream pre-handshake reservation in this integration.
+
+To restore prior admission behavior, set
+`billing.inflight_reservation.enabled: false`. Existing API keys continue to
+authenticate; creation limits affect new creations. All numeric values must
+be non-negative, and the dollar cap must be finite. New tables or migrations
+are not required.
 
 ## Deployment Methods
 
@@ -33,6 +83,7 @@ Pin the GHCR version tag for reproducible deployments. See
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
+| `DEPLOYMENT_LIFECYCLE.md` | Cross-platform local deployment, recovery, and image-retention contract |
 | `.env.example` | Container environment variables template |
 | `DOCKER.md` | Docker Hub documentation |
 | `install.sh` | One-click binary installation script |
@@ -74,10 +125,11 @@ retaining one rollback image, and `./apple-container.sh disk-usage` to inspect
 Apple Containers disk use. Set the optional `APPLE_CONTAINER_*_DATA_DIR`
 variables in `.env` to replace an individual named volume with a host bind
 mount; leaving them empty preserves the original named-volume behavior.
-Persistent mounts are never cleared by application redeployment. The script
-does not provide a continuous restart supervisor; run
-`./apple-container.sh up` after a host reboot. Docker Compose remains the
-recommended production deployment path.
+Persistent mounts are never cleared by application redeployment. The
+application container supervises the Sub2API process so the Web UI's
+update-and-restart flow can relaunch an updated binary. It does not provide
+host-level automatic startup; run `./apple-container.sh up` after a host
+reboot. Docker Compose remains the recommended production deployment path.
 
 See [APPLE_CONTAINER.md](./APPLE_CONTAINER.md) for configuration, upgrades, persistence, networking behavior, and limitations.
 
@@ -114,8 +166,8 @@ docker compose -f docker-compose.local.yml up -d
 # View logs
 docker compose -f docker-compose.local.yml logs -f sub2api
 
-# If admin password was auto-generated, find it in logs:
-docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
+# If admin email/password were auto-generated, find them in logs:
+docker compose -f docker-compose.local.yml logs sub2api | grep "Generated admin"
 
 # Access Web UI
 # http://localhost:8080
@@ -147,7 +199,7 @@ mkdir -p data postgres_data redis_data
 # Start all services using local directory version
 docker compose -f docker-compose.local.yml up -d
 
-# View logs (check for auto-generated admin password)
+# View logs (check for auto-generated admin email and password)
 docker compose -f docker-compose.local.yml logs -f sub2api
 
 # Access Web UI
@@ -171,14 +223,14 @@ When using Docker Compose with `AUTO_SETUP=true`:
    - Connects to PostgreSQL and Redis
    - Applies database migrations (SQL files in `backend/migrations/*.sql`) and records them in `schema_migrations`
    - Generates JWT secret (if not provided)
-   - Creates admin account (password auto-generated if not provided)
+   - Creates admin account (email and password auto-generated if not provided; a provided password must be 8-72 bytes)
    - Writes config.yaml
 
 2. No manual Setup Wizard needed - just configure `.env` and start
 
-3. If `ADMIN_PASSWORD` is not set, check logs for the generated password:
+3. If `ADMIN_EMAIL` / `ADMIN_PASSWORD` are not set, check logs for the generated admin email (login username) and password:
    ```bash
-   docker compose logs sub2api | grep "admin password"
+   docker compose logs sub2api | grep "Generated admin"
    ```
 
 ### Startup and Database Recovery
@@ -305,8 +357,8 @@ docker compose down -v
 | `TOTP_ENCRYPTION_KEY` | **Required when using encrypted secrets** | *(auto-generated)* | Fixed encryption key for persistent 2FA, backup secrets, and Prompt Audit endpoint tokens. |
 | `SKIP_SETUP` | No | `false` | Recovery-only bypass for first-run admin setup. Do not enable for a new or normal deployment. |
 | `SERVER_PORT` | No | `8080` | Server port |
-| `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
-| `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
+| `ADMIN_EMAIL` | No | *(auto-generated)* | Admin email (login username) |
+| `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password (8-72 bytes) |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
 | `UPDATE_GITHUB_TOKEN` | No | *(empty)* | Token for `api.github.com` release checks only; asset downloads remain anonymous. |
 | `WEBAUTHN_ENABLED` | No | `false` | Enables the WebAuthn deployment boundary; Passkey remains off until an administrator enables it in System Settings. |
@@ -316,6 +368,9 @@ docker compose down -v
 | `SERVER_TRUSTED_PROXIES` | No | *(empty)* | Comma-separated direct reverse-proxy/container CIDRs trusted for client IP recovery. Never use a public CDN range or `/0`. |
 | `SERVER_IP_ACCESS_EMERGENCY_ALLOWLIST` | No | *(empty)* | Fixed administrator egress CIDRs that can bypass global IP blocks during proxy recovery. |
 | `SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL` | No | `false` | Legacy raw forwarded-header compatibility. Keep disabled with `SERVER_TRUSTED_PROXIES`; an existing database setting can override the initial environment value. |
+| `RECHARGE_BONUS_TIERS` | No | *(empty = disabled)* | Optional deployment override for the recharge-incentive tiers (JSON array of `min_amount`/`bonus_percent`). Blank keeps the Admin Settings value. |
+| `RECHARGE_BONUS_MODE` | No | `bonus` | Optional deployment override for the tier mode (`bonus` or `discount`). Blank keeps the Admin Settings value. |
+| `RECHARGE_BONUS_NOTICE` | No | *(empty)* | Optional deployment override for the Markdown promotion notice shown on the payment page. Blank keeps the Admin Settings value. |
 | `GATEWAY_OPENAI_PROXY_STREAM_CIRCUIT_DISABLED` | No | `false` | Disables the bounded OpenAI proxy stream/transport-failure circuit only for incident diagnosis. |
 | `GEMINI_OAUTH_CLIENT_ID` | No | *(builtin)* | Google OAuth client ID (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
 | `GEMINI_OAUTH_CLIENT_SECRET` | No | *(builtin)* | Google OAuth client secret (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
@@ -544,15 +599,13 @@ Replace the immutable tag with another value reported by `list-versions` when
 needed:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- install --version 'v0.2.0+custom.004'
+curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- install --version 'v0.2.14+custom.002'
 ```
 
 Roll back an existing binary installation to an earlier published version:
 
-These inherited rollback examples illustrate command syntax. Choose an available, database-compatible release from the owned repository before running them.
-
 ```bash
-curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- rollback 'v0.1.183+custom.004'
+curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- rollback 'v0.2.14+custom.001'
 ```
 
 Upgrade to the latest release:
@@ -576,13 +629,13 @@ curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deplo
 For a downloaded `install.sh`, invoke one operation at a time. For example:
 
 ```bash
-sudo ./install.sh install --version 'v0.2.0+custom.004'
+sudo ./install.sh install --version 'v0.2.14+custom.002'
 ```
 
 Roll back a downloaded-script installation one operation at a time:
 
 ```bash
-sudo ./install.sh rollback 'v0.1.183+custom.004'
+sudo ./install.sh rollback 'v0.2.14+custom.001'
 ```
 
 Or uninstall while preserving `/etc/sub2api`:

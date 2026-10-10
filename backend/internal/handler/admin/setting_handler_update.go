@@ -174,6 +174,8 @@ type UpdateSettingsRequest struct {
 	DefaultConcurrency                        int                               `json:"default_concurrency"`
 	DefaultBalance                            float64                           `json:"default_balance"`
 	AffiliateRebateRate                       *float64                          `json:"affiliate_rebate_rate"`
+	AffiliateRebateRateL2                     *float64                          `json:"affiliate_rebate_rate_l2"`
+	AffiliateRebateRateL3                     *float64                          `json:"affiliate_rebate_rate_l3"`
 	AffiliateRebateFreezeHours                *int                              `json:"affiliate_rebate_freeze_hours"`
 	AffiliateRebateDurationDays               *int                              `json:"affiliate_rebate_duration_days"`
 	AffiliateRebatePerInviteeCap              *float64                          `json:"affiliate_rebate_per_invitee_cap"`
@@ -245,7 +247,6 @@ type UpdateSettingsRequest struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	OpenAITTFTMode                               *string `json:"openai_ttft_mode"`
 	EnableFingerprintUnification                 *bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough                    *bool   `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                             *bool   `json:"enable_cch_signing"`
@@ -257,6 +258,9 @@ type UpdateSettingsRequest struct {
 	EnableClientDatelineNormalization            *bool   `json:"enable_client_dateline_normalization"`
 	AntigravityUserAgentVersion                  *string `json:"antigravity_user_agent_version"`
 	OpenAICodexUserAgent                         *string `json:"openai_codex_user_agent"`
+	OpenAICodexEnvironmentTimezone               *string `json:"openai_codex_environment_timezone"`
+	OpenAICodexEgressCountry                     *string `json:"openai_codex_egress_country"`
+	OpenAICodexResidency                         *string `json:"codex_residency"`
 	CodexLegacyClientProfileCompatibilityEnabled *bool   `json:"codex_legacy_client_profile_compatibility_enabled"`
 	OpenAICodexLocalGroupQuotaEnabled            *bool   `json:"openai_codex_local_group_quota_enabled"`
 	OpenAICodexClientVersion                     *string `json:"openai_codex_client_version"`
@@ -314,11 +318,15 @@ type UpdateSettingsRequest struct {
 	PaymentBalanceRechargeMultiplier *float64 `json:"payment_balance_recharge_multiplier"`
 	PaymentSubscriptionUSDToCNYRate  *float64 `json:"payment_subscription_usd_to_cny_rate"`
 	PaymentRechargeFeeRate           *float64 `json:"payment_recharge_fee_rate"`
-	PaymentLoadBalanceStrat          *string  `json:"payment_load_balance_strategy"`
-	PaymentProductNamePrefix         *string  `json:"payment_product_name_prefix"`
-	PaymentProductNameSuffix         *string  `json:"payment_product_name_suffix"`
-	PaymentHelpImageURL              *string  `json:"payment_help_image_url"`
-	PaymentHelpText                  *string  `json:"payment_help_text"`
+	// nil 表示不更新；空数组表示清空阶梯
+	PaymentRechargeBonusTiers  *[]dto.RechargeBonusTier `json:"payment_recharge_bonus_tiers"`
+	PaymentRechargeBonusMode   *string                  `json:"payment_recharge_bonus_mode"`
+	PaymentRechargeBonusNotice *string                  `json:"payment_recharge_bonus_notice"`
+	PaymentLoadBalanceStrat    *string                  `json:"payment_load_balance_strategy"`
+	PaymentProductNamePrefix   *string                  `json:"payment_product_name_prefix"`
+	PaymentProductNameSuffix   *string                  `json:"payment_product_name_suffix"`
+	PaymentHelpImageURL        *string                  `json:"payment_help_image_url"`
+	PaymentHelpText            *string                  `json:"payment_help_text"`
 
 	// Cancel rate limit
 	PaymentCancelRateLimitEnabled *bool   `json:"payment_cancel_rate_limit_enabled"`
@@ -338,6 +346,7 @@ type UpdateSettingsRequest struct {
 	ChannelMonitorDefaultIntervalSeconds *int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         *bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota              *bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking        *bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping policy
 	GrokDefaultTextModel           *string `json:"grok_default_text_model"`
@@ -346,6 +355,9 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Subscription feature switch (user-facing subscription surface; see SettingKeySubscriptionEnabled)
+	SubscriptionEnabled *bool `json:"subscription_enabled"`
 
 	// Model Plaza feature switches + description
 	ModelPlazaEnabled     *bool   `json:"model_plaza_enabled"`
@@ -367,8 +379,9 @@ type UpdateSettingsRequest struct {
 	GlobalIPAccessControlEnabled *bool `json:"global_ip_access_control_enabled"`
 
 	// cyber 会话屏蔽开关 + TTL
-	CyberSessionBlockEnabled    *bool `json:"cyber_session_block_enabled"`
-	CyberSessionBlockTTLSeconds *int  `json:"cyber_session_block_ttl_seconds"`
+	CyberSessionBlockEnabled    *bool   `json:"cyber_session_block_enabled"`
+	CyberPolicyUserAllowlist    *string `json:"cyber_policy_user_allowlist"`
+	CyberSessionBlockTTLSeconds *int    `json:"cyber_session_block_ttl_seconds"`
 
 	// OpenAI fast/flex policy (optional, only updated when provided)
 	OpenAIFastPolicySettings *dto.OpenAIFastPolicySettings `json:"openai_fast_policy_settings,omitempty"`
@@ -588,6 +601,26 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if affiliateRebateRate > service.AffiliateRebateRateMax {
 		affiliateRebateRate = service.AffiliateRebateRateMax
+	}
+	affiliateRebateRateL2 := previousSettings.AffiliateRebateRateL2
+	if req.AffiliateRebateRateL2 != nil {
+		affiliateRebateRateL2 = *req.AffiliateRebateRateL2
+	}
+	if affiliateRebateRateL2 < service.AffiliateRebateRateMin {
+		affiliateRebateRateL2 = service.AffiliateRebateRateMin
+	}
+	if affiliateRebateRateL2 > service.AffiliateRebateRateMax {
+		affiliateRebateRateL2 = service.AffiliateRebateRateMax
+	}
+	affiliateRebateRateL3 := previousSettings.AffiliateRebateRateL3
+	if req.AffiliateRebateRateL3 != nil {
+		affiliateRebateRateL3 = *req.AffiliateRebateRateL3
+	}
+	if affiliateRebateRateL3 < service.AffiliateRebateRateMin {
+		affiliateRebateRateL3 = service.AffiliateRebateRateMin
+	}
+	if affiliateRebateRateL3 > service.AffiliateRebateRateMax {
+		affiliateRebateRateL3 = service.AffiliateRebateRateMax
 	}
 	affiliateRebateFreezeHours := previousSettings.AffiliateRebateFreezeHours
 	if req.AffiliateRebateFreezeHours != nil {
@@ -1493,11 +1526,35 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 		}
 	}
+	if req.OpenAICodexEnvironmentTimezone != nil {
+		normalized, err := service.NormalizeOpenAICodexEnvironmentTimezone(*req.OpenAICodexEnvironmentTimezone)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "openai_codex_environment_timezone "+err.Error())
+			return
+		}
+		req.OpenAICodexEnvironmentTimezone = &normalized
+	}
+	if req.OpenAICodexEgressCountry != nil {
+		normalized, err := service.NormalizeOpenAICodexEgressCountry(*req.OpenAICodexEgressCountry)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "openai_codex_egress_country "+err.Error())
+			return
+		}
+		req.OpenAICodexEgressCountry = &normalized
+	}
+	if req.OpenAICodexResidency != nil {
+		normalized, err := service.NormalizeOpenAICodexResidency(*req.OpenAICodexResidency)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "codex_residency "+err.Error())
+			return
+		}
+		req.OpenAICodexResidency = &normalized
+	}
 	if req.OpenAICodexClientVersion != nil {
 		// 该值会被拼进出站 User-Agent 与 version 头，必须是合法版本号；空串表示跟随自动同步。
 		normalized := strings.TrimSpace(*req.OpenAICodexClientVersion)
 		if normalized != "" && service.NormalizeCodexClientVersion(normalized) == "" {
-			response.Error(c, http.StatusBadRequest, "openai_codex_client_version must be empty or a valid version (e.g. 0.147.0)")
+			response.Error(c, http.StatusBadRequest, "openai_codex_client_version must be empty or a valid version (e.g. 0.158.0)")
 			return
 		}
 		if normalized != "" && service.CompareVersions(normalized, service.OpenAICodexUpstreamMinVersion) < 0 {
@@ -1553,6 +1610,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.CodexCLIOnlyEngineFingerprintSignals != nil {
 		if err := service.ValidateEngineFingerprintSignalsJSON(*req.CodexCLIOnlyEngineFingerprintSignals); err != nil {
 			response.Error(c, http.StatusBadRequest, "codex_cli_only_engine_fingerprint_signals "+err.Error())
+			return
+		}
+	}
+
+	// 风控用户白名单：提供时必须可解析（官方 v0.2.10 新增，Plus 侧同样先校验再落盘）。
+	if req.CyberPolicyUserAllowlist != nil {
+		if _, err := service.ParseCyberPolicyUserAllowlist(*req.CyberPolicyUserAllowlist); err != nil {
+			response.BadRequest(c, err.Error())
 			return
 		}
 	}
@@ -1704,6 +1769,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultConcurrency:                     req.DefaultConcurrency,
 		DefaultBalance:                         req.DefaultBalance,
 		AffiliateRebateRate:                    affiliateRebateRate,
+		AffiliateRebateRateL2:                  affiliateRebateRateL2,
+		AffiliateRebateRateL3:                  affiliateRebateRateL3,
 		AffiliateRebateFreezeHours:             affiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:            affiliateRebateDurationDays,
 		AffiliateRebatePerInviteeCap:           affiliateRebatePerInviteeCap,
@@ -1757,12 +1824,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.EnableFingerprintUnification
 			}
 			return previousSettings.EnableFingerprintUnification
-		}(),
-		OpenAITTFTMode: func() string {
-			if req.OpenAITTFTMode != nil {
-				return *req.OpenAITTFTMode
-			}
-			return previousSettings.OpenAITTFTMode
 		}(),
 		EnableMetadataPassthrough: func() bool {
 			if req.EnableMetadataPassthrough != nil {
@@ -1823,6 +1884,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAICodexUserAgent
 			}
 			return previousSettings.OpenAICodexUserAgent
+		}(),
+		OpenAICodexEnvironmentTimezone: func() string {
+			if req.OpenAICodexEnvironmentTimezone != nil {
+				return *req.OpenAICodexEnvironmentTimezone
+			}
+			return previousSettings.OpenAICodexEnvironmentTimezone
+		}(),
+		OpenAICodexEgressCountry: func() string {
+			if req.OpenAICodexEgressCountry != nil {
+				return *req.OpenAICodexEgressCountry
+			}
+			return previousSettings.OpenAICodexEgressCountry
+		}(),
+		OpenAICodexResidency: func() string {
+			if req.OpenAICodexResidency != nil {
+				return *req.OpenAICodexResidency
+			}
+			return previousSettings.OpenAICodexResidency
 		}(),
 		CodexLegacyClientProfileCompatibilityEnabled: func() bool {
 			if req.CodexLegacyClientProfileCompatibilityEnabled != nil {
@@ -1997,6 +2076,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.ChannelMonitorShowQuota
 		}(),
+		ChannelMonitorHideUserRanking: func() bool {
+			if req.ChannelMonitorHideUserRanking != nil {
+				return *req.ChannelMonitorHideUserRanking
+			}
+			return previousSettings.ChannelMonitorHideUserRanking
+		}(),
 		GrokDefaultTextModel: func() string {
 			if req.GrokDefaultTextModel != nil {
 				return *req.GrokDefaultTextModel
@@ -2020,6 +2105,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.AvailableChannelsEnabled
 			}
 			return previousSettings.AvailableChannelsEnabled
+		}(),
+		SubscriptionEnabled: func() bool {
+			if req.SubscriptionEnabled != nil {
+				return *req.SubscriptionEnabled
+			}
+			return previousSettings.SubscriptionEnabled
 		}(),
 		ModelPlazaEnabled: func() bool {
 			if req.ModelPlazaEnabled != nil {
@@ -2075,6 +2166,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.GlobalIPAccessControlEnabled
 			}
 			return previousSettings.GlobalIPAccessControlEnabled
+		}(),
+		CyberPolicyUserAllowlist: func() string {
+			if req.CyberPolicyUserAllowlist != nil {
+				return *req.CyberPolicyUserAllowlist
+			}
+			return previousSettings.CyberPolicyUserAllowlist
 		}(),
 		CyberSessionBlockEnabled: func() bool {
 			if req.CyberSessionBlockEnabled != nil {
@@ -2181,6 +2278,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			BalanceRechargeMultiplier:     req.PaymentBalanceRechargeMultiplier,
 			SubscriptionUSDToCNYRate:      req.PaymentSubscriptionUSDToCNYRate,
 			RechargeFeeRate:               req.PaymentRechargeFeeRate,
+			RechargeBonusTiers:            rechargeBonusTiersFromDTO(req.PaymentRechargeBonusTiers),
+			RechargeBonusMode:             req.PaymentRechargeBonusMode,
+			RechargeBonusNotice:           req.PaymentRechargeBonusNotice,
 			LoadBalanceStrategy:           req.PaymentLoadBalanceStrat,
 			ProductNamePrefix:             req.PaymentProductNamePrefix,
 			ProductNameSuffix:             req.PaymentProductNameSuffix,
@@ -2367,6 +2467,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultConcurrency:                                     updatedSettings.DefaultConcurrency,
 		DefaultBalance:                                         updatedSettings.DefaultBalance,
 		AffiliateRebateRate:                                    updatedSettings.AffiliateRebateRate,
+		AffiliateRebateRateL2:                                  updatedSettings.AffiliateRebateRateL2,
+		AffiliateRebateRateL3:                                  updatedSettings.AffiliateRebateRateL3,
 		AffiliateRebateFreezeHours:                             updatedSettings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:                            updatedSettings.AffiliateRebateDurationDays,
 		AffiliateRebatePerInviteeCap:                           updatedSettings.AffiliateRebatePerInviteeCap,
@@ -2400,6 +2502,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            updatedSettings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   updatedSettings.OpenAICodexUserAgent,
+		OpenAICodexEnvironmentTimezone:                         updatedSettings.OpenAICodexEnvironmentTimezone,
+		OpenAICodexEgressCountry:                               updatedSettings.OpenAICodexEgressCountry,
+		OpenAICodexResidency:                                   updatedSettings.OpenAICodexResidency,
 		CodexLegacyClientProfileCompatibilityEnabled:           updatedSettings.CodexLegacyClientProfileCompatibilityEnabled,
 		OpenAICodexLocalGroupQuotaEnabled:                      updatedSettings.OpenAICodexLocalGroupQuotaEnabled,
 		OpenAICodexClientVersion:                               updatedSettings.OpenAICodexClientVersion,
@@ -2459,6 +2564,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentBalanceRechargeMultiplier:                       updatedPaymentCfg.BalanceRechargeMultiplier,
 		PaymentSubscriptionUSDToCNYRate:                        updatedPaymentCfg.SubscriptionUSDToCNYRate,
 		PaymentRechargeFeeRate:                                 updatedPaymentCfg.RechargeFeeRate,
+		PaymentRechargeBonusTiers:                              rechargeBonusTiersToDTO(updatedPaymentCfg.RechargeBonusTiers),
+		PaymentRechargeBonusMode:                               rechargeBonusModeToDTO(updatedPaymentCfg.RechargeBonusMode),
+		PaymentRechargeBonusNotice:                             updatedPaymentCfg.RechargeBonusNotice,
 		PaymentLoadBalanceStrat:                                updatedPaymentCfg.LoadBalanceStrategy,
 		PaymentProductNamePrefix:                               updatedPaymentCfg.ProductNamePrefix,
 		PaymentProductNameSuffix:                               updatedPaymentCfg.ProductNameSuffix,
@@ -2477,12 +2585,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         updatedSettings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              updatedSettings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        updatedSettings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           updatedSettings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: updatedSettings.GrokCrossClientModelMapEnabled,
 		GrokDefaultBaseURLMode:         updatedSettings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+		SubscriptionEnabled:      updatedSettings.SubscriptionEnabled,
 
 		ModelPlazaEnabled:       updatedSettings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:   updatedSettings.ModelPlazaRequireAuth,
@@ -2496,6 +2606,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ClientDisconnectConsecutiveBanThreshold: updatedSettings.ClientDisconnectConsecutiveBanThreshold,
 		GlobalIPAccessControlEnabled:            updatedSettings.GlobalIPAccessControlEnabled,
 		CyberSessionBlockEnabled:                updatedSettings.CyberSessionBlockEnabled,
+		CyberPolicyUserAllowlist:                updatedSettings.CyberPolicyUserAllowlist,
 		CyberSessionBlockTTLSeconds:             updatedSettings.CyberSessionBlockTTLSeconds,
 		AccountSchedulingThresholds:             updatedSettings.AccountSchedulingThresholds,
 		AllowUserViewErrorRequests:              updatedSettings.AllowUserViewErrorRequests,
@@ -2535,6 +2646,7 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentEnabledTypes != nil || req.PaymentBalanceDisabled != nil ||
 		req.PaymentBalanceRechargeMultiplier != nil || req.PaymentSubscriptionUSDToCNYRate != nil ||
 		req.PaymentRechargeFeeRate != nil ||
+		req.PaymentRechargeBonusTiers != nil || req.PaymentRechargeBonusMode != nil || req.PaymentRechargeBonusNotice != nil ||
 		req.PaymentLoadBalanceStrat != nil || req.PaymentProductNamePrefix != nil ||
 		req.PaymentProductNameSuffix != nil || req.PaymentHelpImageURL != nil ||
 		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||

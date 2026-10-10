@@ -11,6 +11,10 @@ import (
 )
 
 var codexModelMap = map[string]string{
+	"gpt-6.1-sol":          "gpt-6.1-sol",
+	"gpt-6-sol":            "gpt-6-sol",
+	"gpt-6-luna":           "gpt-6-luna",
+	"gpt-6-astra":          "gpt-6-astra",
 	"gpt-5.6-sol":          "gpt-5.6-sol",
 	"gpt-5.6-terra":        "gpt-5.6-terra",
 	"gpt-5.6-luna":         "gpt-5.6-luna",
@@ -59,6 +63,9 @@ var codexVersionModelPrefixes = []struct {
 	prefix string
 	target string
 }{
+	{prefix: "gpt-6.1-sol", target: "gpt-6.1-sol"},
+	{prefix: "gpt-6-sol", target: "gpt-6-sol"},
+	{prefix: "gpt-6-luna", target: "gpt-6-luna"},
 	{prefix: "gpt-5.6-sol", target: "gpt-5.6-sol"},
 	{prefix: "gpt-5.6-terra", target: "gpt-5.6-terra"},
 	{prefix: "gpt-5.6-luna", target: "gpt-5.6-luna"},
@@ -219,7 +226,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		}
 	}
 
-	// 请求带 reasoning 时补齐 include:["reasoning.encrypted_content"]，与真实 Codex 对齐
+	// 恒补 include:["reasoning.encrypted_content"]，与真实 Codex 对齐
 	// （compact 端点形态不同，单独处理，此处跳过）。
 	if !opts.IsCompact && ensureCodexReasoningInclude(reqBody) {
 		result.Modified = true
@@ -355,6 +362,12 @@ func normalizeCodexToolChoice(reqBody map[string]any) bool {
 	}
 	choiceType := strings.TrimSpace(firstNonEmptyString(choiceMap["type"]))
 	if choiceType == "" {
+		return false
+	}
+	if choiceType == "allowed_tools" {
+		// This is a selection policy, not a declared tool type. Preserve it for
+		// upstream validation (including references to input.additional_tools);
+		// falling back to auto would silently discard the caller's restriction.
 		return false
 	}
 	modified := false
@@ -1210,10 +1223,11 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 		reqBody["tool_choice"] = map[string]any{"type": "image_generation"}
 		modified = true
 	}
-	if imageModel != openAIImagesResponsesMainModel {
+	mainModel := openAIImagesResponsesMainModelValue()
+	if imageModel != mainModel {
 		modified = true
 	}
-	reqBody["model"] = openAIImagesResponsesMainModel
+	reqBody["model"] = mainModel
 	return modified
 }
 
@@ -1221,7 +1235,15 @@ func normalizeOpenAIModelForUpstream(account *Account, model string) string {
 	if account == nil || account.UsesOpenAICodexProtocol() {
 		return normalizeCodexModel(model)
 	}
-	return strings.TrimSpace(model)
+	model = strings.TrimSpace(model)
+	if account.Platform == PlatformDeepseek {
+		// DeepSeek 走 OpenAI 兼容入口，不经 Anthropic 入站的 [1m] 后缀归一
+		// （parseGatewayRequestCurrentBody 仅处理 PlatformAnthropic 协议）。
+		// 官方 Claude Code 接入要求 ANTHROPIC_MODEL=deepseek-flash[1m] 写法，
+		// 出站前剥离泄漏的客户端上下文后缀，转发规范名给上游。
+		return normalizeClaudeCodeLongContextModel(model)
+	}
+	return model
 }
 
 func SupportsVerbosity(model string) bool {
@@ -1392,8 +1414,7 @@ func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
 
 // defaultCodexSynthInstructions 返回合成路径在 instructions 为空时应填入的默认提示词。
 //
-// 按 model 选择真实 Codex CLI 的 base instructions（codex 系→GPT-5-Codex，
-// gpt-5.2→GPT-5.2，gpt-5.1/gpt-5→GPT-5.1），使合成请求在提示词层面贴近真实 Codex 行为；
+// 按 model 选择真实 Codex CLI 的 base instructions，使合成请求在提示词层面贴近真实 Codex 行为；
 // 若内嵌 prompt 意外为空，回退到最小占位符以保证字段非空。
 func defaultCodexSynthInstructions(model string) string {
 	if instructions := strings.TrimSpace(openai.CodexBaseInstructionsForModel(model)); instructions != "" {
@@ -1402,15 +1423,13 @@ func defaultCodexSynthInstructions(model string) string {
 	return "You are a helpful coding assistant."
 }
 
-// ensureCodexReasoningInclude 在请求带 reasoning 时补齐 include:["reasoning.encrypted_content"]。
+// ensureCodexReasoningInclude 恒补 include:["reasoning.encrypted_content"]。
 //
-// 真实 Codex 在 reasoning 存在时总会请求加密推理内容（ChatGPT/store=false 场景下用于上下文回放）。
-// 该函数为加法式、幂等：仅在 include 缺失或未包含该项时追加；对非数组的异常 include 不做破坏性改写。
+// 真实 Codex 出站请求总是携带该项（client.rs: include = vec!["reasoning.encrypted_content"]，
+// ChatGPT/store=false 场景下用于上下文回放），与请求是否声明 reasoning 无关。
+// 该函数为加法式、幂等：仅在 include 缺失或未包含该项时追加，客户端显式
+// 携带的其他 include 项保留；对非数组的异常 include 不做破坏性改写。
 func ensureCodexReasoningInclude(reqBody map[string]any) bool {
-	reasoning, ok := reqBody["reasoning"].(map[string]any)
-	if !ok || len(reasoning) == 0 {
-		return false
-	}
 	const encrypted = "reasoning.encrypted_content"
 	switch existing := reqBody["include"].(type) {
 	case nil:

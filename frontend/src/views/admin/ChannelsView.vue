@@ -340,6 +340,7 @@
             </div>
 
             <!-- Codex Image Generation Bridge (OpenAI only) -->
+            <p v-if="section.platform === 'video'" class="mb-4 text-sm text-gray-500">视频接口协议和参数在「分组管理 → 编辑分组」配置；此处设置渠道价格。</p>
             <div v-if="section.platform === 'openai'" class="border-t border-gray-200 pt-3 dark:border-dark-600">
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -451,6 +452,7 @@
                   enable-tier-multipliers
                   @update="updatePricingEntry(sIdx, idx, $event)"
                   @remove="removePricingEntry(sIdx, idx)"
+                  @split="splitPricingEntry(sIdx, idx, $event)"
                 />
               </div>
             </div>
@@ -581,6 +583,7 @@
                       :platform="section.platform"
                       @update="rule.pricing.splice(pIdx, 1, $event)"
                       @remove="removeRulePricingEntry(sIdx, ruleIndex, pIdx)"
+                      @split="splitRulePricingEntry(section.platform, rule, pIdx, $event)"
                     />
                   </div>
                 </div>
@@ -632,9 +635,10 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
+import channelsAPI from '@/api/admin/channels'
 import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
-import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, perTokenToMTok, validateIntervals, validateTimePricing } from '@/components/admin/channel/types'
+import { apiIntervalsToForm, apiTimePricingToForm, buildSyncedPricingEntries, createDefaultTimePricingForm, filterAlreadyCoveredModels, findModelConflict, formIntervalsToAPI, formReasoningEffortMultipliersToAPI, formTimePricingToAPI, isValidPositiveMultiplier, mTokToPerToken, perTokenToMTok, referenceToPricingRule, validateIntervals, validateReasoningEffortMultipliers, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
 import { platformTextClass, platformBadgeLightClass } from '@/utils/platformColors'
@@ -763,9 +767,9 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek']
+const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'stepfun', 'opencode_go', 'video', 'typesafe']
 // Composite pricing/mapping may target every concrete schedulable provider.
-const compositePlatforms: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek']
+const compositePlatforms: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'stepfun', 'opencode_go', 'typesafe']
 
 // ── Helpers ──
 function formatDate(value: string): string {
@@ -854,8 +858,8 @@ function toggleGroupInSection(sectionIdx: number, groupId: number) {
 }
 
 // ── Pricing helpers ──
-function addPricingEntry(sectionIdx: number) {
-  form.platforms[sectionIdx].model_pricing.push({
+function emptyPricingEntry(): PricingFormEntry {
+  return {
     models: [],
     billing_mode: 'token',
     input_price: null,
@@ -865,12 +869,17 @@ function addPricingEntry(sectionIdx: number) {
     cache_read_price: null,
     fast_multiplier: null,
     flex_multiplier: null,
+    reasoning_effort_multipliers: null,
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
     intervals: [],
-    time_pricing: createDefaultTimePricingForm()
-  })
+    time_pricing: createDefaultTimePricingForm(),
+  }
+}
+
+function addPricingEntry(sectionIdx: number) {
+  form.platforms[sectionIdx].model_pricing.push(emptyPricingEntry())
 }
 
 const syncingPlatform = ref<string | null>(null)
@@ -881,34 +890,38 @@ async function syncLatestModels(sectionIdx: number) {
   syncingPlatform.value = platform
   try {
     const result = await adminAPI.channels.syncPricingModels(platform)
-    // Collect all model names already present in this platform's pricing entries
-    const existingModels = new Set<string>()
-    for (const entry of form.platforms[sectionIdx].model_pricing) {
-      for (const m of entry.models) existingModels.add(m)
-    }
-    const newModels = result.models.filter(m => !existingModels.has(m))
+    // 只新建本平台还没有覆盖的型号：精确匹配与通配符规则都要算，否则重复同步
+    // 或已有 `claude-*` 规则时会建出重复条目。
+    const newModels = filterAlreadyCoveredModels(
+      result.models.map(ref => ref.model),
+      form.platforms[sectionIdx].model_pricing,
+    )
     if (newModels.length === 0) {
       appStore.showSuccess(t('admin.channels.form.syncModelsAlreadyUpToDate'))
       return
     }
-    // Add new models as a single new pricing entry (user fills in prices)
-    form.platforms[sectionIdx].model_pricing.push({
-      models: newModels,
-      billing_mode: 'token',
-      input_price: null,
-      output_price: null,
-      cache_write_price: null,
-      cache_write_1h_price: null,
-      cache_read_price: null,
-      fast_multiplier: null,
-      flex_multiplier: null,
-      image_input_price: null,
-      image_output_price: null,
-      per_request_price: null,
-      intervals: [],
-      time_pricing: createDefaultTimePricingForm()
-    })
-    appStore.showSuccess(t('admin.channels.form.syncModelsSuccess', { count: newModels.length }))
+
+    const newModelSet = new Set(newModels)
+    // 每个模型一条独立规则，各自带自己的官方价（同步每次都会新鲜返回）。
+    const rules = buildSyncedPricingEntries(
+      result.models.filter(ref => newModelSet.has(ref.model)),
+    )
+    for (const rule of rules) {
+      form.platforms[sectionIdx].model_pricing.push(rule.entry)
+    }
+
+    const priced = rules.filter(rule => rule.reference.status === 'priced').length
+    const needsPricing = rules.length - priced
+    if (needsPricing > 0) {
+      appStore.showSuccess(
+        t('admin.channels.form.syncModelsPartial', { count: newModels.length, priced, needsPricing })
+      )
+    } else {
+      appStore.showSuccess(t('admin.channels.form.syncModelsSuccess', { count: newModels.length }))
+    }
+    if (result.refresh_status === 'stale' || result.warning_code) {
+      appStore.showWarning(t('admin.channels.form.syncModelsStaleCatalog'))
+    }
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, t('admin.channels.form.syncModelsError')))
   } finally {
@@ -922,6 +935,46 @@ function updatePricingEntry(sectionIdx: number, idx: number, updated: PricingFor
 
 function removePricingEntry(sectionIdx: number, idx: number) {
   form.platforms[sectionIdx].model_pricing.splice(idx, 1)
+}
+
+/**
+ * 一次粘贴多个模型时，把多出来的模型拆成独立规则。
+ * 不拆分就只能给它们填同一套价（一条规则本来就是一套价）。
+ * 拆分出的每个模型都要独立查一次参考价：早期实现只查第一个型号，
+ * 其余型号拿到的是第一条规则的空价或第一个型号的价。
+ */
+async function splitPricingEntry(sectionIdx: number, idx: number, models: string[]) {
+  const entries = form.platforms[sectionIdx].model_pricing
+  const source = entries[idx]
+  if (!source || !models.length) return
+  const platform = form.platforms[sectionIdx].platform
+  const additions = await Promise.all(models.map(model => resolveSplitEntry(platform, model)))
+  entries.splice(idx + 1, 0, ...additions)
+}
+
+async function splitRulePricingEntry(platform: string, rule: { pricing: PricingFormEntry[] }, pIdx: number, models: string[]) {
+  const source = rule.pricing[pIdx]
+  if (!source || !models.length) return
+  const additions = await Promise.all(models.map(model => resolveSplitEntry(platform, model)))
+  rule.pricing.splice(pIdx + 1, 0, ...additions)
+}
+
+/**
+ * 为拆分出来的单个模型查参考价并生成独立规则。
+ * manual/unsupported：保留空规则但带上参考价元数据，卡片上显示原因；
+ * 查询失败：同样留空，由运营者手填（不阻断拆分本身）。
+ */
+async function resolveSplitEntry(platform: string, model: string): Promise<PricingFormEntry> {
+  const base = emptyPricingEntry()
+  base.models = [model]
+  if (!platform) return base
+  try {
+    const reference = await channelsAPI.getModelDefaultPricing(platform, model)
+    const { entry } = referenceToPricingRule(reference)
+    return entry
+  } catch {
+    return base
+  }
 }
 
 // ── Model Mapping helpers ──
@@ -961,20 +1014,7 @@ function addAccountStatsRule(sectionIdx: number) {
 }
 
 function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
-  form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push({
-    models: [],
-    billing_mode: 'token',
-    input_price: null,
-    output_price: null,
-    cache_write_price: null,
-    cache_write_1h_price: null,
-    cache_read_price: null,
-    image_input_price: null,
-    image_output_price: null,
-    per_request_price: null,
-    intervals: [],
-    time_pricing: createDefaultTimePricingForm()
-  })
+  form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push(emptyPricingEntry())
 }
 
 function removeAccountStatsRule(sectionIdx: number, ruleIndex: number) {
@@ -1087,6 +1127,7 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
             cache_write_price: mTokToPerToken(p.cache_write_price),
             cache_write_1h_price: mTokToPerToken(p.cache_write_1h_price),
             cache_read_price: mTokToPerToken(p.cache_read_price),
+            reasoning_effort_multipliers: formReasoningEffortMultipliersToAPI(p.reasoning_effort_multipliers),
             image_input_price: mTokToPerToken(p.image_input_price),
             image_output_price: mTokToPerToken(p.image_output_price),
             per_request_price: p.per_request_price != null && p.per_request_price !== '' ? Number(p.per_request_price) : null,
@@ -1132,6 +1173,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         cache_read_price: mTokToPerToken(entry.cache_read_price),
         fast_multiplier: entry.fast_multiplier != null && entry.fast_multiplier !== '' ? Number(entry.fast_multiplier) : null,
         flex_multiplier: entry.flex_multiplier != null && entry.flex_multiplier !== '' ? Number(entry.flex_multiplier) : null,
+        reasoning_effort_multipliers: formReasoningEffortMultipliersToAPI(entry.reasoning_effort_multipliers),
         image_input_price: mTokToPerToken(entry.image_input_price),
         image_output_price: mTokToPerToken(entry.image_output_price),
         per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
@@ -1234,6 +1276,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
         cache_read_price: perTokenToMTok(p.cache_read_price),
         fast_multiplier: p.fast_multiplier,
         flex_multiplier: p.flex_multiplier,
+        reasoning_effort_multipliers: p.reasoning_effort_multipliers ? { ...p.reasoning_effort_multipliers } : null,
         image_input_price: perTokenToMTok(p.image_input_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
@@ -1425,6 +1468,7 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
         cache_write_price: perTokenToMTok(p.cache_write_price),
         cache_write_1h_price: perTokenToMTok(p.cache_write_1h_price),
         cache_read_price: perTokenToMTok(p.cache_read_price),
+        reasoning_effort_multipliers: p.reasoning_effort_multipliers ? { ...p.reasoning_effort_multipliers } : null,
         image_input_price: perTokenToMTok(p.image_input_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
@@ -1534,6 +1578,23 @@ async function handleSubmit() {
         appStore.showError(t('admin.channels.form.perRequestPriceRequired'))
         return
       }
+    }
+  }
+
+  // 思考等级倍率同时适用于渠道计价和独立的账号统计计价规则。
+  for (const section of form.platforms.filter(s => s.enabled)) {
+    const entries = [
+      ...section.model_pricing,
+      ...section.account_stats_pricing_rules.flatMap(rule => rule.pricing),
+    ]
+    for (const entry of entries) {
+      const error = validateReasoningEffortMultipliers(entry.reasoning_effort_multipliers, t)
+      if (!error) continue
+      const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+      const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
+      appStore.showError(`${platformLabel} - ${modelLabel}: ${error}`)
+      activeTab.value = section.platform
+      return
     }
   }
 

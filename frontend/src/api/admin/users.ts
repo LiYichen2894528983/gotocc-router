@@ -5,7 +5,7 @@
 
 import { apiClient } from '../client'
 import type { AdminUser, UpdateUserRequest, PaginatedResponse } from '@/types'
-import type { AdminSupportAPIKey } from './supportView'
+import type { AdminAPIKeySummary } from './apiKeySummary'
 
 export interface AdminBindAuthIdentityChannelRequest {
   channel: string
@@ -222,8 +222,8 @@ export async function toggleStatus(id: number, status: 'active' | 'disabled'): P
  * @param id - User ID
  * @returns List of user's API keys
  */
-export async function getUserApiKeys(id: number): Promise<PaginatedResponse<AdminSupportAPIKey>> {
-  const { data } = await apiClient.get<PaginatedResponse<AdminSupportAPIKey>>(`/admin/users/${id}/api-keys`)
+export async function getUserApiKeys(id: number): Promise<PaginatedResponse<AdminAPIKeySummary>> {
+  const { data } = await apiClient.get<PaginatedResponse<AdminAPIKeySummary>>(`/admin/users/${id}/api-keys`)
   return data
 }
 
@@ -331,7 +331,12 @@ export async function bindUserAuthIdentity(
 /**
  * Platform quota types
  */
-export type PlatformQuotaPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok'
+// Keep aligned with backend/internal/service/domain_constants.go AllowedQuotaPlatforms.
+export const PLATFORM_QUOTA_PLATFORMS = [
+  'anthropic', 'openai', 'gemini', 'antigravity', 'grok',
+  'kimi', 'zhipu', 'deepseek', 'minimax', 'stepfun', 'opencode_go', 'typesafe',
+] as const
+export type PlatformQuotaPlatform = typeof PLATFORM_QUOTA_PLATFORMS[number]
 export type PlatformQuotaWindow = 'daily' | 'weekly' | 'monthly'
 
 export interface PlatformQuotaItem {

@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import Toggle from '@/components/common/Toggle.vue'
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import QuotaDimensionRow from './QuotaDimensionRow.vue'
+import { getTimezoneOptions } from '@/utils/timezones'
 import type { QuotaThresholdType, QuotaResetMode } from '@/constants/account'
 
 const { t } = useI18n()
@@ -90,13 +92,8 @@ watch(localEnabled, (val) => {
   }
 })
 
-// Common timezone options
-const timezoneOptions = [
-  'UTC', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Singapore', 'Asia/Kolkata',
-  'Asia/Dubai', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow',
-  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-  'America/Sao_Paulo', 'Australia/Sydney', 'Pacific/Auckland',
-]
+// Common timezone options（完整 IANA 列表，与出口时区下拉共用数据源）
+const timezoneOptions = getTimezoneOptions().map((opt) => opt.value)
 
 // Hours for dropdown (0-23)
 const hourOptions = Array.from({ length: 24 }, (_, i) => i)
@@ -145,21 +142,9 @@ const dailyFixedHint = computed(() =>
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          @click="localEnabled = !localEnabled"
-          :class="[
-            'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-            localEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-          ]"
-        >
-          <span
-            :class="[
-              'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-              localEnabled ? 'translate-x-5' : 'translate-x-0'
-            ]"
-          />
-        </button>
+        <Toggle
+          v-model="localEnabled"
+        />
       </div>
 
       <!-- Collapsible content -->

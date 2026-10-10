@@ -10,7 +10,7 @@ Use repository-declared versions:
 
 - Go: `backend/go.mod`
 - Node.js and pnpm: `frontend/package.json`
-- CI reference: `.github/workflows/backend-ci.yml`
+- Build and CI parameters: `gotocc-build.json`
 
 Do not copy tool versions into additional policy documents.
 
@@ -28,22 +28,15 @@ machine paths, passwords, or production data to tracked documentation.
 
 ## Install and Build
 
-```bash
-pnpm --dir frontend install --frozen-lockfile
-pnpm --dir frontend run build
-
-cd backend
-go build ./cmd/server
-```
-
-The root Makefile also provides:
+One entry point builds the frontend and the server with the embedded frontend.
+Local release packages run it inside the build image from
+`deploy/Dockerfile.validation`, and CI runs the same script:
 
 ```bash
+python3 tools/gotocc_build.py --output backend/bin/sub2api
+# or
 make build
-make test
 ```
-
-On Windows without GNU Make, run the underlying Go and pnpm commands directly.
 
 ## Run in Development
 
@@ -65,24 +58,16 @@ Copy configuration examples to ignored local files before editing them. See
 
 ## Verification
 
-Backend:
+CI (`.github/workflows/ci.yml`) builds through the entry point above and then
+type-checks every backend package with its unit and integration tests:
 
 ```bash
-cd backend
-go test -tags=unit ./...
-go test -tags=integration ./...
-golangci-lint run ./...
+go -C backend vet -tags=unit ./...
+go -C backend vet -tags=integration ./...
 ```
 
-Frontend:
-
-```bash
-pnpm --dir frontend run lint:check
-pnpm --dir frontend run typecheck
-pnpm --dir frontend run test:run
-```
-
-Deployment scripts are checked by `.github/workflows/backend-ci.yml`.
+Run a focused test only to diagnose an observed problem. `unit` is in-process;
+`integration` uses Docker or a real DSN.
 
 ## Code Generation
 
@@ -115,9 +100,10 @@ test stubs/mocks before running the broader test suite.
 
 ### Configuration ignored from the environment
 
-New config fields need a registered default or explicit binding so Viper can
-reach them through environment variables. Update the config tests and deployment
-examples together.
+For configuration sourced from YAML or environment variables, register a
+default or explicit binding so Viper can reach the field. Update relevant tests
+and deployment examples. Database-backed settings follow their own defaults,
+persistence, and documentation contract.
 
 ### Database migration failure
 
@@ -139,7 +125,7 @@ sub2api-plus/
 ├── deploy/         Installers, Compose files, and operations documentation
 ├── docs/           Provider, protocol, and maintainer documentation
 ├── openspec/       Specifications for cross-cutting changes
-└── tools/          Repository validation scripts
+└── tools/          Build entry point and generators
 ```
 
 ## Related Documents

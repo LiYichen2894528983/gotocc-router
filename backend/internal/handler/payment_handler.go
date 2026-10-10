@@ -149,6 +149,9 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		BalanceRechargeMultiplier:     cfg.BalanceRechargeMultiplier,
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
+		RechargeBonusTiers:            cfg.RechargeBonusTiers,
+		RechargeBonusMode:             cfg.RechargeBonusMode,
+		RechargeBonusNotice:           cfg.RechargeBonusNotice,
 		HelpText:                      cfg.HelpText,
 		HelpImageURL:                  cfg.HelpImageURL,
 		StripePublishableKey:          cfg.StripePublishableKey,
@@ -166,6 +169,9 @@ type checkoutInfoResponse struct {
 	BalanceRechargeMultiplier     float64                         `json:"balance_recharge_multiplier"`
 	SubscriptionUSDToCNYRate      float64                         `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate               float64                         `json:"recharge_fee_rate"`
+	RechargeBonusTiers            []service.RechargeBonusTier     `json:"recharge_bonus_tiers"`
+	RechargeBonusMode             string                          `json:"recharge_bonus_mode"`
+	RechargeBonusNotice           string                          `json:"recharge_bonus_notice"`
 	HelpText                      string                          `json:"help_text"`
 	HelpImageURL                  string                          `json:"help_image_url"`
 	StripePublishableKey          string                          `json:"stripe_publishable_key"`
@@ -336,7 +342,7 @@ func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeC
 // GetMyOrders returns the authenticated user's orders.
 // GET /api/v1/payment/orders/my
 func (h *PaymentHandler) GetMyOrders(c *gin.Context) {
-	subject, ok := requireAuth(c)
+	subject, ok := requireReadAuth(c)
 	if !ok {
 		return
 	}
@@ -356,57 +362,10 @@ func (h *PaymentHandler) GetMyOrders(c *gin.Context) {
 	response.Paginated(c, sanitizePaymentOrdersForResponse(orders), int64(total), page, pageSize)
 }
 
-// AdminSupportListOrders returns a target user's orders through the same
-// provider-detail-free DTO used by the user-facing endpoint.
-func (h *PaymentHandler) AdminSupportListOrders(c *gin.Context) {
-	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
-	if err != nil || userID <= 0 {
-		response.BadRequest(c, "Invalid user ID")
-		return
-	}
-
-	page, pageSize := response.ParsePagination(c)
-	orders, total, err := h.paymentService.GetUserOrders(c.Request.Context(), userID, service.OrderListParams{
-		Page:        page,
-		PageSize:    pageSize,
-		Status:      c.Query("status"),
-		OrderType:   c.Query("order_type"),
-		PaymentType: c.Query("payment_type"),
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Paginated(c, sanitizePaymentOrdersForResponse(orders), int64(total), page, pageSize)
-}
-
-// AdminSupportGetOrder returns one order only when it belongs to the explicit
-// support target. No cancel, refund, retry, or fulfillment route is registered
-// in the support namespace.
-func (h *PaymentHandler) AdminSupportGetOrder(c *gin.Context) {
-	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
-	if err != nil || userID <= 0 {
-		response.BadRequest(c, "Invalid user ID")
-		return
-	}
-	orderID, err := strconv.ParseInt(c.Param("order_id"), 10, 64)
-	if err != nil || orderID <= 0 {
-		response.BadRequest(c, "Invalid order ID")
-		return
-	}
-
-	order, err := h.paymentService.GetOrder(c.Request.Context(), orderID, userID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, sanitizePaymentOrderForResponse(order))
-}
-
 // GetOrder returns a single order for the authenticated user.
 // GET /api/v1/payment/orders/:id
 func (h *PaymentHandler) GetOrder(c *gin.Context) {
-	subject, ok := requireAuth(c)
+	subject, ok := requireReadAuth(c)
 	if !ok {
 		return
 	}
@@ -530,6 +489,7 @@ type PublicOrderResult struct {
 	Amount              float64    `json:"amount"`
 	PayAmount           float64    `json:"pay_amount"`
 	FeeRate             float64    `json:"fee_rate"`
+	BonusAmount         float64    `json:"bonus_amount"`
 	Currency            string     `json:"currency"`
 	PaymentType         string     `json:"payment_type"`
 	OrderType           string     `json:"order_type"`
@@ -565,6 +525,7 @@ func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
 		Amount:              order.Amount,
 		PayAmount:           order.PayAmount,
 		FeeRate:             order.FeeRate,
+		BonusAmount:         order.BonusAmount,
 		Currency:            service.PaymentOrderCurrency(order),
 		PaymentType:         order.PaymentType,
 		OrderType:           order.OrderType,
@@ -673,6 +634,7 @@ type PaymentOrderResult struct {
 	Amount              float64    `json:"amount"`
 	PayAmount           float64    `json:"pay_amount"`
 	FeeRate             float64    `json:"fee_rate"`
+	BonusAmount         float64    `json:"bonus_amount"`
 	Currency            string     `json:"currency"`
 	PaymentType         string     `json:"payment_type"`
 	OutTradeNo          string     `json:"out_trade_no"`
@@ -711,6 +673,7 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 		Amount:              order.Amount,
 		PayAmount:           order.PayAmount,
 		FeeRate:             order.FeeRate,
+		BonusAmount:         order.BonusAmount,
 		Currency:            service.PaymentOrderCurrency(order),
 		PaymentType:         order.PaymentType,
 		OutTradeNo:          order.OutTradeNo,
@@ -732,4 +695,12 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 
 func isWeChatBrowser(c *gin.Context) bool {
 	return strings.Contains(strings.ToLower(c.GetHeader("User-Agent")), "micromessenger")
+}
+
+func requireReadAuth(c *gin.Context) (middleware2.AuthSubject, bool) {
+	subject, ok := middleware2.GetReadSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+	}
+	return subject, ok
 }

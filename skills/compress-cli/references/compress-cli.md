@@ -8,9 +8,8 @@ a compact index of normative rules, not a substitute for `CONTRIBUTING.md`,
 local OpenSpec change. OpenSpec implementation plans are untracked working
 artifacts; durable behavior belongs in the owning documentation and tests.
 
-Do not import templates from unrelated repositories. This project uses Go,
-Vue, pnpm, repository-local Python CLIs, and platform validation containers. It
-does not use npm-only, Maven, or Spring Boot contributor workflows.
+This project uses Go, Vue, pnpm, repository-local Python CLIs, and platform
+validation containers.
 
 ## Format Contract
 
@@ -21,10 +20,28 @@ does not use npm-only, Maven, or Spring Boot contributor workflows.
 - There is no fixed 15-35 line target. A rule required for correctness or
   security must never be removed to satisfy a size recommendation.
 - Explanations and command catalogs belong in linked sources of truth.
+- `Local Skill` owns both the repository skill path and its trigger; no separate
+  trigger category is required.
+
+## Rule Scope
+
+Frontend dependency changes use pnpm and its lockfile; Go dependency changes
+keep `backend/go.mod` and `backend/go.sum` synchronized. Configuration rules
+follow the field's storage or environment source. Deployment examples change
+when deployment configuration changes, not for every database or API field.
+Verify repository scripts and Make targets exist; native tool commands also
+require verified syntax, supported versions, and the correct execution context.
+
+Release consistency applies to one release artifact. Historical finalization
+uses its published tag and mapping independently of the current embedded
+version. Publication authorization covers release tags, Releases, and
+publication images. Local validation image builds, reuse, and scoped cleanup
+are governed by `Verification` and do not require a publication request.
 
 ## Protected Semantics
 
-Treat `Security Audit` and `Codex Identity` as same-priority security rules.
+Treat `Security Audit`, `Outbound Identity` and `Codex Identity` as same-priority
+protected rules.
 Compression must retain the following behavior unless an explicit policy
 change updates this reference, the validator, its tests, and the linked source:
 
@@ -51,15 +68,49 @@ change updates this reference, the validator, its tests, and the linked source:
 - Codex outbound identity keeps the credential-owning account, valid global
   setting, and compiled default precedence. Header or request paths cannot
   bypass it, and identity changes update the complete outbound-path test set.
+- Every provider-bound request uses the trusted User-Agent/client identifier/
+  version triple defined in `docs/OUTBOUND_IDENTITY.md`. OAuth, setup-token,
+  API Key, upstream, Bedrock, Vertex/service_account, compatible suppliers and
+  new account types have no bypass. The Codex contract remains unchanged;
+  non-Codex identities use the documented account/global/default precedence
+  and atomic candidate fallthrough.
+- Caller headers, generic overrides, cached fingerprints, SDK defaults,
+  classification and adapters cannot select or overwrite identity. Same-owner
+  HTTP/WS, retries, probes, discovery, usage, OAuth and batch paths reuse their
+  snapshot; failover resolves the new owner. Identity is applied before signing,
+  and signed declarations remain stable at send time. Presets render only their
+  protocol-defined headers and coherent companion/body declarations.
+- Version-only changes preserve source, client family, identifier, OS,
+  architecture, terminal and SDK fingerprint. New types/paths, client or
+  dependency upgrades and upstream merges preserve the contract and require
+  source/default, header/body, transport-path, signing, failover and fingerprint
+  regressions with synchronized owning documentation and tests. Identity rules
+  and checks must not be weakened to accommodate upstream behavior.
+
+`Test Design` is also a required protected category. Its source of truth is
+[CONTRIBUTING.md](../../../CONTRIBUTING.md#requirement-based-test-design).
+Tests derive scenarios and expectations independently from business
+requirements, acceptance criteria, and authoritative contracts; current
+implementation and the code under test cannot define their own correctness.
+Preserve applicable success, failure, boundary, and required/forbidden
+side-effect coverage. Fix implementations that violate requirements instead of
+weakening assertions or changing expectations merely to pass. Defect regressions
+must detect the original incorrect behavior. Passing tests or coverage alone
+cannot establish business correctness. The validator protects these policy
+anchors and their documentation link, not the semantic quality of every test.
+Its regression cases must independently model removal and weakening of each
+requirement rather than derive their expectations from validator constants.
 
 Also preserve the rule that cross-cutting OpenSpec plans stay local and
 untracked while durable behavior is committed to its owning documentation and
 tests. Preserve secret handling, generated-code, migration, pnpm,
 default-branch, container-only validation, protected PR, immutable tag,
 publication authorization, and upstream-merge rules. Every validation command,
-including focused iteration checks, must run in Docker on macOS/Linux or
-Docker inside WSL2 Debian or Ubuntu on Windows; host-side
-validation is forbidden. After every validation attempt, remove project
+including focused iteration checks, must run in Apple Containers on macOS,
+Docker inside WSL2 Debian or Ubuntu on Windows, or Docker on Linux; host-side
+validation is forbidden, including focused release metadata and deterministic
+finalization checks. `Submit PR` references this same environment for both
+profiles. After every validation attempt, remove project
 validation containers, temporary resources, and historical writable snapshots.
 Retain only project validation images and dependency caches whose deterministic
 identities match the current pinned toolchain and dependency-lock inputs, and

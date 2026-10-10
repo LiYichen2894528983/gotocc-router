@@ -4,6 +4,121 @@ Sub2API Plus accepts OpenAI-compatible Responses requests over HTTP and
 client-facing WebSocket ingress. Account routing can use an upstream WebSocket
 or bridge the client WebSocket to an HTTP/SSE upstream.
 
+## CC Switch usage and client lifecycle
+
+`GET /v1/usage` returns the authenticated API key's usage and applicable
+quota, subscription or wallet view without generating model output. Existing
+CC Switch imports that append `/v1/usage` to a base URL already ending in
+`/v1` may also use `GET /v1/v1/usage`. This explicit read-only alias is
+normalized before the same authentication and non-consuming billing checks.
+New imports normalize the base URL in their supplied usage script. Entering
+only a URL in CC Switch does not enable or configure its usage-query script.
+
+WebSocket admission and all forwarding modes share one client reader. Client
+disconnects cancel pending user/account admission; messages remain ordered
+and pass through the existing per-turn validation and audit. A temporary
+same-priority account overflow retains its original session binding through
+the handler's final admission step.
+
+The **Use Key** dialog enables `api_key_model_discovery = true` under `[features]`
+when generating a remote Codex model catalog configuration. This applies to
+OpenAI HTTP/WebSocket, Grok, and all routed Codex groups, including StepFun and
+Composite, on Unix and Windows. File catalog mode uses `model_catalog_json`
+without the remote discovery flag. Switching catalog mode preserves the
+selected authentication mode and the group's existing API base URL.
+
+The existing DeepSeek and MiniMax native Codex model fallback lists use the
+[shared official provider catalog](../CN_PROVIDER_MODELS.md). Group allowlist
+candidates use each provider's own models; saved client aliases and account
+model mappings retain their existing behavior. Catalog updates do not change
+request extraction, model admission order, routing, billing, or outbound identity.
+DeepSeek Flash aliases are separate candidates: with no explicit administrator
+mapping, `deepseek-flash`, `deepseek-v4.1-flash`, `deepseek-v4-flash-vision-exp`
+and `deepseek-v4-flash` retain their requested spelling in the upstream model field.
+The versioned IDs `deepseek-v4-flash-0731` and `deepseek-v4-pro-0813` follow the
+same rule and are included in both model candidates and empty-mapping admission.
+
+Usage timing follows the shared [first-token/total-duration/TPS contract](../USAGE_TIMING.md)
+(Average TPS uses non-media output tokens over total forwarding/turn duration),
+including HTTP passthrough, individual WS turns, and remote compaction. Aggregate
+compact output does not create a token clock. The obsolete `openai_ttft_mode`
+admin setting has been removed; `timing_version` identifies verified usage data.
+
+## GPT-6 Astra
+
+The gateway uses OpenAI's canonical `gpt-6-astra` model ID. Bare `gpt-6`
+remains an independent, unknown model spelling and does not inherit Astra
+compatibility, catalog capabilities, cache identity, or billing policy.
+Reasoning-level suffixes are never treated as model IDs.
+Astra accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning effort;
+it does not accept `none` or `minimal`. Configured Codex catalogs default it
+to `low` and preserve `max` as distinct from `xhigh` in request and usage
+metadata. The additional Codex catalog level `ultra` is a client-side
+multi-agent preset that delegates with `xhigh`; it is never sent upstream as
+an API reasoning effort.
+
+Generated API client configuration advertises the 1,050,000-token API context
+window and 128,000-token maximum output. Configured Codex catalogs follow the
+Codex client contract separately: the active context window is 272,000 and the
+maximum configuration override is 872,000.
+
+Default OpenAI model catalogs and model-mapping presets list Astra first. The
+admin account test UI still prefers `gpt-5.6-sol` when it is available, so
+catalog presentation order does not silently change the connectivity probe.
+
+Default API cost accounting uses $10 input, $1 cached input, $12.50 cache
+write, and $50 output per million tokens. Flex is half of Standard and Fast is
+twice Standard. Astra Ultrafast costs six times Standard independently of a
+channel's Fast multiplier. Official Platform API-key catalogs advertise it;
+OAuth catalogs require an explicit upstream account capability rather than a
+subscription-plan label. Native account-provided service tiers remain authoritative.
+OpenAI publishes Batch at half of Standard through its separate
+Batch API; this Responses gateway does not infer Batch from `service_tier`.
+When total input is 272,001 tokens or more, the whole-request long-context
+policy multiplies all ordinary input, cache-read input, and cache-write input
+by 2 and all output by 1.5. The 272,000-token boundary retains Standard rates.
+Platform API-key Astra requests always apply this official cost policy;
+ChatGPT OAuth account policy remains independently configurable. Group and
+channel custom selling-price overrides retain their existing precedence.
+
+Astra tool calling requires the Responses API. Callers must omit
+`temperature`, `top_p`, and `top_logprobs`; Chat Completions callers must also
+omit `logprobs`, and Responses callers must not request
+`message.output_text.logprobs` through `include`. Fast/priority processing is
+not available with EU data residency and does not carry a latency SLA.
+Responses features such as async tool calls, `configuration_update`, and
+mid-turn WebSocket steering pass through the gateway without Astra-specific
+rewriting.
+
+## GPT-6.1 Sol and GPT-6 Sol/Luna
+
+`gpt-6.1-sol`, `gpt-6-sol`, and `gpt-6-luna` retain separate model and billing
+identities. Registered effort suffixes and provider-qualified spellings resolve
+to the same SKU; preview names and unknown suffixes do not inherit these rules.
+Live account metadata remains authoritative. Offline Sol/Luna catalogs use the
+existing GPT-5.6 context template; GPT-6.1 Sol uses its bundled Codex metadata,
+with a 272,000 active context and 872,000 maximum configuration override.
+
+GPT-6.1 Sol defaults to `low` and accepts `max` separately from `xhigh`.
+Its catalog `ultra` level delegates with `xhigh` and is not an upstream effort.
+Explicit `none`/`minimal` or disabled thinking is rejected after model mapping
+and before protocol conversion. Tool calls require Responses; Chat-only
+fallbacks return a client error before sending upstream. GPT-6 Sol/Luna allow
+Chat tool calls only with `reasoning_effort=none`. With reasoning enabled, these
+families drop incompatible sampling and logprob fields in Responses conversion.
+Chat Completions and Messages bridges use the final mapped upstream model for
+model-specific conversion, including removal of unsupported sampling fields.
+The inbound model and content remain available for cache identity and the
+pre-conversion canonical audit.
+
+All three families share the supported Responses prompt-cache contract. The
+fallback Standard input/output/cache-write/cache-read prices per million tokens
+are respectively $2/$10/$2.50/$0.10 for GPT-6.1 Sol, $2/$10/$2.50/$0.20 for
+GPT-6 Sol, and $0.10/$0.50/$0.125/$0.01 for GPT-6 Luna. Fast is 2x and Flex is
+0.5x. At more than 272,000 total input tokens, whole-request input/cache rates
+are 2x and output rates 1.5x. Explicit channel prices, including zero cache
+write, retain precedence; one SKU cannot fall back to another family's card.
+
 ## Prompt Cache Identity and Usage
 
 Current Codex clients can supply the canonical `session-id`, `thread-id`, and
@@ -24,10 +139,45 @@ For OpenAI Responses and Compact requests, the gateway resolves one opaque,
 tenant-isolated cache identity from an explicit `prompt_cache_key`, a supported
 session header, or a stable content prefix with a meaningful user/input anchor.
 It writes the finalized UUID to both the upstream `prompt_cache_key` and the
-canonical `session-id` header; the legacy `session_id` alias carries the same
-value. A model-only request does not receive a content-derived key. API-key
+canonical `session-id` header. Official Codex never sends a `conversation_id`
+header, so Codex-protocol outbound requests never carry one, and the official
+wire format spells the session header `session-id` only: every Codex-protocol
+outbound path (HTTP forward, passthrough, Messages bridge, WebSocket
+handshake, compact probe, alpha search) drops the legacy `session_id` alias
+regardless of fingerprint mode, matching the official `build_session_headers`.
+Non-Codex compatible-supplier paths (OpenAI API-key accounts) keep the Plus
+`session-id` + `session_id` dual spelling, and inbound `session_id` remains
+accepted for sticky routing. A model-only request does not receive a content-derived key. API-key
 Chat Completions requests converted to Responses use the same behavior, while
 raw Chat Completions forwarding does not receive Responses-only cache fields.
+
+Codex-protocol outbound request bodies always carry
+`include: ["reasoning.encrypted_content"]`, matching the official client's
+unconditional declaration: the gateway merges and deduplicates the item with
+any client-provided `include` values and preserves other client-declared
+items. HTTP passthrough and WebSocket compatibility bodies receive the same
+merge. The only exception is the HTTP `/responses/compact` endpoint, whose
+request shape differs and is handled separately. Remote Compact v2
+(`compaction_trigger` on `/responses`) still carries the include declaration,
+matching the official Responses client. Client-owned
+`client_metadata` keys — `turn_id`, `parent_turn_id`,
+`root_turn_id`, `mcp_attribution`, and unknown future keys — pass through the
+proxy verbatim; `mcp_attribution` is the official client's own responsibility
+and the gateway never generates, parses, or trims it.
+
+The declaration never depends on the transport or the attempt number: WebSocket
+reconnects replay the request payload unchanged, so a retried turn still carries
+`include: ["reasoning.encrypted_content"]`.
+
+Codex-protocol requests are normalized with one unsupported-field set across the
+HTTP forward, HTTP passthrough, Messages bridge, and WebSocket compatibility
+paths: `max_output_tokens`, `max_completion_tokens`, `temperature`, `top_p`,
+`frequency_penalty`, `presence_penalty`, `chat_template_kwargs`, `user`,
+`metadata`, `prompt_cache_options`, `prompt_cache_retention`,
+`safety_identifier`, `stream_options`, `truncation`, and `stop_sequences` are
+removed before the upstream request. A passthrough account therefore produces
+the same body as a non-passthrough account instead of relying on a rejected-field
+retry to recover from a first-request 400.
 
 Under the default hard-affinity mode, account priority changes do not replace a
 valid active session route. The optional sticky-weighted scheduler mode remains
@@ -53,10 +203,13 @@ over to another account and removes the old account's response ID before
 forwarding. Tool-output continuations without complete call context remain on
 the response owner and keep the existing fail-closed OAuth ownership checks.
 
-`prompt_cache_options` is forwarded only for GPT-5.6-family OpenAI Platform
-API-key Responses/Compact traffic. ChatGPT OAuth and older or unknown model
-families have that field removed. Deprecated `prompt_cache_retention` is
-removed on every path.
+`prompt_cache_options` is forwarded only for GPT-6 Astra, GPT-6.1 Sol,
+GPT-6 Sol/Luna, and GPT-5.6-family
+OpenAI Platform API-key Responses/Compact traffic. ChatGPT OAuth and older or
+unknown model families have that field removed. Deprecated
+`prompt_cache_retention` is removed on every path. Current callers should use
+`prompt_cache_options.ttl` with the only supported value, `30m`; setting
+`mode` to `explicit` disables the implicit cache breakpoint.
 
 Usage ingestion treats ordinary input, cache-read input, and cache-write input
 as mutually exclusive stored buckets. Usage pages may report each bucket's
@@ -64,6 +217,48 @@ share of total tokens, but do not derive a prompt-cache hit rate from these
 counters.
 Canonical nested usage details take priority by field presence, including an
 explicit zero, before known top-level compatibility aliases are considered.
+
+## Codex Scheduler Quota Windows
+
+OpenAI account scoring reads canonical `codex_5h_*` and `codex_7d_*` usage
+fields first. Historical `codex_primary_*` / `codex_secondary_*` snapshots reuse
+the same Normalize window classification used when writing extras, so `primary`
+is never assumed to be the 7-day window. Reset scoring prefers the canonical
+5-hour reset time and falls back to the session window. Relative
+`reset_after_seconds` is anchored at `codex_usage_updated_at`; a missing sample
+time does not slide the countdown forward on each score. Scheduler weights,
+pause thresholds, and Plus session/quota accounting are unchanged.
+
+## Upstream Capacity Shed
+
+OpenAI capacity-shed signals (`server_is_overloaded`, `slow_down`, and messages
+such as `Our servers are currently overloaded` or `Selected model is at
+capacity`) are request-scoped. The gateway does not retry the same account and
+does not switch accounts. The first upstream response is returned to the
+client as HTTP 503. Account health, scheduling, and pause state are unchanged.
+
+When the error is forwarded, `server_is_overloaded` / `slow_down` are rewritten
+to `server_error` so Codex CLI does not treat them as a fatal session-ending
+code. The original message is preserved. Rate-limit codes are not rewritten.
+Codex WebSocket HTTP-bridge and native WS turns deliver that rewritten event
+on the current connection instead of switching accounts or closing with a
+generic proxy failure.
+
+Anthropic `overloaded_error` / HTTP 529 and Grok shared model-capacity errors
+follow the same no-retry rule for the current request.
+
+Transport failures, account-scoped 401/403/429, and OAuth 429 windows keep
+their existing retry and failover behavior.
+
+## Responses Stream Sequence Numbers
+
+Gateway-synthesized and re-emitted Responses SSE frames always write
+`sequence_number`, including `0`. Compact HTTP/SSE bridges number events
+monotonically from `0`. Synthetic `response.failed` frames and WebSocket-to-HTTP
+bridge error/`response.failed` events emit `0` when the previous sequence is
+unknown. Strict clients such as Grok Build treat the field as required and abort
+the turn when it is omitted. The OpenAI spec marks it optional; Plus still emits
+it so those clients can deserialize the stream.
 
 ## Codex Rate-Limit Response Headers
 
@@ -100,13 +295,186 @@ pass it through for an automatic-passthrough account, or suppress it. Named
 model-specific limit families remain independent. HTTP and SSE headers are
 finalized before their response bodies are written.
 
+Beyond the default `codex` family, the gateway parses the official
+supplementary declarations on every successful response:
+
+- `X-Codex-Limit-Name` names the default metered limit (typically the metered
+  model slug).
+- `X-Codex-Credits-Has-Credits`, `X-Codex-Credits-Unlimited`, and
+  `X-Codex-Credits-Balance` form a realtime credits snapshot supplement and
+  are persisted on the account Extra (`codex_credits_*`); the WHAM
+  usage/credit pull remains the authoritative source. In-band
+  `codex.rate_limits` events may carry credits without windows and still
+  refresh that snapshot.
+- Additional metered limit families are discovered by scanning the
+  `x-{limit}-primary-used-percent` suffix the way the official client does:
+  `x-codex-secondary-primary-*` belongs to the `codex_secondary` family (not
+  the default 5-hour window), together with its `x-{limit}-limit-name` and
+  secondary-window variants. Additional families and the default
+  `X-Codex-Limit-Name` are persisted on the account Extra for diagnostics;
+  the default 5h/7d quota windows and the auto-pause thresholds continue to
+  come from the default family only.
+- `x-codex-promo-message` and `x-codex-rate-limit-reached-type` are official
+  display-only declarations and are relayed to the downstream client verbatim
+  after generic response-header filtering; the gateway never derives quota or
+  billing decisions from them.
+
+On an upstream `429`, the gateway classifies the condition before deciding how
+to schedule:
+
+- `x-codex-active-limit` names the metered family the upstream actually hit. When
+  it names a family other than the default `codex` family, that family's window
+  and reset time drive the cooldown; the default family's healthy 5h/7d windows
+  cannot override the named family's exhausted window.
+- A 429 whose error type declares an exhausted account quota or credit —
+  `insufficient_quota`, `credit_balance_exhausted`, any
+  `*_spend_limit_exceeded` variant, or `usage_not_included` — is terminal. The
+  gateway opens no same-account retry window for it and parks the account so
+  scheduling selects a different one, instead of re-firing a request that cannot
+  succeed.
+- `openai-model` names the model that actually served the request. It joins
+  the response-model observer before body events (terminal body declarations
+  still win, and a disagreement raises the conflict flag). In-band events
+  follow the official `response_model()` order: nested `response.headers`,
+  then top-level `headers` on WebSocket metadata events; `response.model` is
+  a Plus fallback when neither header is present. For Codex-protocol
+  accounts a server-declared model that differs from the baseline billing
+  model and has identified pricing corrects the recorded billing model; the
+  downstream response body is never rewritten. The `x-openai-model` spelling is
+  accepted as well.
+- `x-models-etag` marks the upstream model-catalog revision and is recorded
+  as a structured log signal for the future pinned-models integration.
+- The `codex_rollout_budget_units` declaration in `response.completed` usage
+  is a fractional JSON number; the gateway parses and records it per usage
+  log as a reserved billing dimension and does not use it in cost calculation
+  yet.
+
 The dedicated `/backend-api/wham/usage` route remains a local-only view. It
 returns the API key subscription quota when the local setting is enabled and
 returns 404 otherwise; it does not select an account or proxy upstream quota.
 
+Administrators may optionally bind an OpenAI subscription group to one
+credential-owning OpenAI OAuth account that is already bound to that group.
+This does not change the group's routing pool. Raw default weekly observations
+from real inference HTTP traffic (including compatible endpoints) and
+`codex.rate_limits` WebSocket events share one observation path, before
+client-facing local quota rewrites. WebSocket connection handshake headers
+may refresh the account usage cache, but they are a connection-time snapshot
+and never drive this feature. Account usage probes, standalone quota
+queries and reset-credit workflows never drive this feature. Only an
+explicit 10,080-minute / 604,800-second default window with a raw absolute reset
+time is eligible. Daily, 5-hour, monthly, unknown and model-specific/Spark windows
+never drive this feature. Display countdowns, expired-cache synthetic zeroes,
+reset-credit expiration dates and local account A/U costs are not reset signals.
+
+No background worker queries OpenAI for this feature. A reset is evaluated only
+when an eligible source account returns a fresh official weekly window during a
+real inference session. Local pending events are still processed in the
+database, but processing them never performs an upstream request.
+
+Saving a new binding, re-enabling a disabled binding or changing its source locks
+the source and clears the group's old baseline. Its first fresh confirmed window
+only establishes a baseline; it never clears subscriptions, even if the account
+retains an old deadline or pending reset evidence from an earlier activation.
+Only a real inference session sampled after activation establishes that baseline;
+standalone quota queries and samples observed at or before activation cannot
+establish it. Sample time is the HTTP response or WebSocket event time, so a
+request that started before activation and completed after it can establish the
+baseline. While an off-schedule window is awaiting confirmation, new bindings keep waiting.
+Disabling clears the baseline and advances the configuration generation, making
+old pending events inapplicable. Upgrades preserve continuously enabled bindings
+and existing subscription counters; the migration performs no quota resets.
+Migration `265_openai_weekly_reset_observations.sql` changes the event uniqueness
+key to include the reset sequence. Deploy it together with the updated backend;
+backend instances sharing this database must not mix old and new event writers.
+Ordinary group edits, including copying members while retaining
+the same reset source, preserve the current baseline and configuration generation; stale
+source-configuration saves are rejected for reload. Natural rollover can be
+accepted when the prior deadline has expired and the next deadline advances by
+more than five minutes. Early deadline changes in either direction, and usage
+drops of at least one percentage point with an unchanged deadline, first persist
+pending evidence. A separate real inference session sampled at least one second
+later and within ten minutes must corroborate it. Deadline changes within five
+minutes are treated as clock drift. Stale/out-of-order samples are ignored.
+A sample cannot confirm or postpone its own pending evidence. Confirmation
+requires two real inference samples: live HTTP `/responses` (and compatible)
+headers, or in-band `codex.rate_limits` events. Reparsing the same WebSocket
+handshake headers at a later turn cannot corroborate or dismiss pending
+evidence. Account usage-cache writes also compare sample times under
+the account row lock, retaining subsecond precision: older or duplicate samples
+cannot replace newer usage percentages or deadlines. Unrelated account settings
+in the same update still merge; missing or invalid historical timestamps do not
+prevent fresh snapshots from being stored. No zero-percent observation is required: the first observed
+post-reset usage may already be 7% or higher. A first-ever same-deadline reset
+cannot be inferred without a prior utilization sample.
+
+Confirmed resets have a durable monotonic sequence, so two real resets with
+the same announced deadline remain distinguishable while refreshes are idempotent.
+Each event resets the active subscriptions' 5-hour, daily, and weekly usage;
+monthly usage is reset only when the group explicitly enables it and has a
+monthly limit. The local confirmation time starts the new subscription windows;
+quota limits are unchanged. Historical consumption is not replayed or backfilled
+from account A/U statistics, and account usage logs remain intact. New charges
+after the reset accumulate normally. Event application and usage billing lock the group and
+subscription records in the same order, so a concurrent charge is
+deterministically ordered before or after the reset. Deleting the source
+account, or removing it from the group, leaves its recorded name and ID on the
+group for diagnosis, but disables further automatic resets until another
+eligible bound source is selected.
+
+Source membership is checked when creating reset events and again when either
+billing or the local event applier applies them. An unbound source neither advances
+the group's baseline nor clears usage through a previously pending event.
+Observation and event-application paths acquire the group lock before rechecking
+membership in a fresh statement, so a lock wait cannot retain pre-edit membership.
+Event application also refreshes source eligibility before applying any reset.
+
+An accepted window repeated by the source still establishes missing group
+baselines without resetting them. A behind baseline on a continuously enabled
+group can be reconciled after natural rollover. Synchronized groups do not create
+duplicate events. Opening the group editor reloads its current server detail,
+including the baseline, rather than reusing an older list-row snapshot.
+While the editor remains open, its baseline/status refresh every 15 seconds
+without changing unsaved settings; refreshes stop when it closes.
+Async editor detail, routing and manifest-name results are discarded after a
+new edit selection, closing the editor or leaving the page.
+
+Creating or editing a group with copied accounts commits its configuration,
+membership and scheduler outbox entries together. A failed copy rolls back the
+entire write. Copying an unchanged source cannot temporarily expose an unbound
+source to reset workers. Copied accounts are locked before the group, in ID
+order, matching observation lock ordering and avoiding membership-FK deadlocks.
+The same account-before-group order applies to single-account additions,
+replacement of an account's group bindings, and batch membership inserts.
+Creating a Spark shadow with group bindings also locks the existing credential
+parent before groups, since the new account's parent foreign key locks that row.
+Membership writers lock all affected existing accounts in ascending ID order
+before acquiring live-group locks or inserting membership foreign keys. This
+also applies inside a caller-owned transaction; callers that edit groups before
+binding members must prelock the complete account set at transaction entry.
+Weekly observations and membership writes can wait for one another without
+reversing that order, and a rollback retains the original group bindings.
+
+Multiple workers process each group's pending events in order, preserving
+earlier monthly-reset decisions. Billing consumes eligible pending events
+before adding the request's cost, including inside a caller-owned transaction;
+subsequent worker passes cannot erase that cost. Pending events with deleted,
+ineligible, disabled, or replaced sources are ignored by both paths. Persistence
+of an already received upstream observation uses a bounded five-second context
+independent of downstream cancellation and makes no additional upstream call.
+
 This response-header compatibility does not make Codex App API-key calls to
 `account/rateLimits/read` available; that App Server authentication behavior is
 outside this gateway's request path.
+
+## Codex Residency
+
+The global setting `codex_residency` is `off` or `us`. `us` adds
+`x-openai-internal-codex-residency: us` to Codex-protocol Responses forwarding,
+including HTTP passthrough and the Responses WebSocket handshake, and to
+refresh, revoke, and chatgpt.com backend-api calls. `off` sends nothing and
+strips a client-supplied copy. Authorization-code exchange and device-code do
+not send the header. See `docs/OUTBOUND_IDENTITY.md` for the source rule.
 
 ## Codex Fingerprint Convergence
 
@@ -128,9 +496,10 @@ cancel, and other non-create subpaths are not session turns and receive no
 fingerprint mutation.
 
 Fingerprint preparation runs before final request construction. Plus
-prompt-cache/session isolation is authoritative for the final `session-id` and
-`session_id` headers, while fingerprint convergence remains authoritative for
-installation and thread/turn metadata. `off` disables only fingerprint-owned
+prompt-cache/session isolation is authoritative for the final `session-id`
+header on Codex-protocol outbound (the legacy `session_id` alias is removed
+for every Codex account), while fingerprint convergence remains authoritative
+for installation and thread/turn metadata. `off` disables only fingerprint-owned
 header and body mutation; it does not disable Plus cache isolation, security,
 session sharing, or compact policy. WebSocket connection reuse compares final
 stable handshake carriers even when `off` or `device` leaves those values
@@ -165,12 +534,12 @@ current direct-user message text and images. It excludes `instructions`, tool
 definitions, reusable prompt variables, assistant/model messages, reasoning,
 tool calls/results, approval responses, and tool-produced screenshots. This
 prevents platform context or external tool content from being reported as a
-user policy violation. Prompt Audit also consumes that canonical result, but
-its selection follows `v0.1.177+custom.003`: conversation text such as
-`instructions`, message text, and reusable prompt variables is scanned, while
-static `tools` schemas and structured tool-call arguments/results are not
-treated as prompt text. Latest-turn blocking scans the latest user text plus
-the nearest preceding assistant/model output.
+user policy violation. Prompt Audit consumes the same current direct-user text
+and does not scan images. It excludes `instructions`, tool definitions,
+reusable prompt variables, assistant/model messages, reasoning, and tool
+calls/results. Client harness XML inside user text may be stripped before the
+Guard scan. A turn with no current user text is an empty Prompt Audit
+selection.
 A supported WebSocket control frame may produce no audit input. Unknown sibling
 keys, unsupported event/item types, and valid-JSON unrecognized structures pass
 through without an audit-derived block. When the canonical extractor recognizes
@@ -250,6 +619,14 @@ gateway:
   disables it.
 - The API-key connection cap is distributed through Redis; `0` disables it.
 
+The connection lease is acquired after the first frame passes basic validation
+and security audit, before user/account concurrency, billing and upstream work.
+An upgraded socket waiting for its first frame is bounded by the first-message
+timeout and does not yet consume a Redis lease. Capacity exhaustion or an
+unavailable lease backend closes the upgraded socket with code `1013` (try again
+later); clients should reconnect with backoff. Audit rejection retains its own
+error frame and close status and never consumes a connection lease.
+
 Large contexts or slow image-heavy requests may require a higher first-message
 timeout. The timeout expires before HTTP bridge routing and is not overridden
 by bridge mode.
@@ -272,3 +649,27 @@ gateway:
 The environment equivalent is
 `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true`. Use `http_bridge` when the
 client keeps a WebSocket while the selected upstream uses HTTP/SSE.
+
+## Encrypted history recovery
+
+An explicit `invalid_encrypted_content` HTTP 400 or HTTP 200 SSE
+`response.failed`/`error` may recover once on the same credential owner before
+semantic output is committed. The HTTP and SSE paths share one request-local
+recovery budget. Metadata and gateway keepalive do not count as output; delivered
+text, reasoning, tool actions and media do. Generic error messages do not trigger
+cipher cleanup.
+
+The replacement body uses the existing encrypted-history sanitizer: remove
+rejected opaque encrypted fields/compaction while retaining readable reasoning
+summaries, ordinary input, tool calls/results, and required continuation IDs.
+Without usable input after cleanup (including an isolated reasoning ID with no
+readable summary/content), return the original failure without replay.
+Both regular forwarding and HTTP passthrough use the same rules and the same
+account identity snapshot. No account switch or unauthenticated identity source
+is introduced by this recovery.
+
+The recovered rejection is recorded as a `retry` upstream attempt with reason
+`invalid_encrypted_content`, and updates the existing session invalid-cipher
+lineage. Only the final response contributes the final usage result; no extra
+terminal event or duplicate final billing occurs. A repeated rejection is
+returned normally. See [error diagnostics](../ERROR_REQUEST_DIAGNOSTICS.md).

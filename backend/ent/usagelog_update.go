@@ -504,6 +504,33 @@ func (_u *UsageLogUpdate) AddAudioOutputTokens(v int) *UsageLogUpdate {
 	return _u
 }
 
+// SetCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field.
+func (_u *UsageLogUpdate) SetCodexRolloutBudgetUnits(v float64) *UsageLogUpdate {
+	_u.mutation.ResetCodexRolloutBudgetUnits()
+	_u.mutation.SetCodexRolloutBudgetUnits(v)
+	return _u
+}
+
+// SetNillableCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableCodexRolloutBudgetUnits(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetCodexRolloutBudgetUnits(*v)
+	}
+	return _u
+}
+
+// AddCodexRolloutBudgetUnits adds value to the "codex_rollout_budget_units" field.
+func (_u *UsageLogUpdate) AddCodexRolloutBudgetUnits(v float64) *UsageLogUpdate {
+	_u.mutation.AddCodexRolloutBudgetUnits(v)
+	return _u
+}
+
+// ClearCodexRolloutBudgetUnits clears the value of the "codex_rollout_budget_units" field.
+func (_u *UsageLogUpdate) ClearCodexRolloutBudgetUnits() *UsageLogUpdate {
+	_u.mutation.ClearCodexRolloutBudgetUnits()
+	return _u
+}
+
 // SetInputCost sets the "input_cost" field.
 func (_u *UsageLogUpdate) SetInputCost(v float64) *UsageLogUpdate {
 	_u.mutation.ResetInputCost()
@@ -751,6 +778,27 @@ func (_u *UsageLogUpdate) AddDurationMs(v int) *UsageLogUpdate {
 // ClearDurationMs clears the value of the "duration_ms" field.
 func (_u *UsageLogUpdate) ClearDurationMs() *UsageLogUpdate {
 	_u.mutation.ClearDurationMs()
+	return _u
+}
+
+// SetTimingVersion sets the "timing_version" field.
+func (_u *UsageLogUpdate) SetTimingVersion(v int) *UsageLogUpdate {
+	_u.mutation.ResetTimingVersion()
+	_u.mutation.SetTimingVersion(v)
+	return _u
+}
+
+// SetNillableTimingVersion sets the "timing_version" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableTimingVersion(v *int) *UsageLogUpdate {
+	if v != nil {
+		_u.SetTimingVersion(*v)
+	}
+	return _u
+}
+
+// AddTimingVersion adds value to the "timing_version" field.
+func (_u *UsageLogUpdate) AddTimingVersion(v int) *UsageLogUpdate {
+	_u.mutation.AddTimingVersion(v)
 	return _u
 }
 
@@ -1460,6 +1508,15 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedAudioOutputTokens(); ok {
 		_spec.AddField(usagelog.FieldAudioOutputTokens, field.TypeInt, value)
 	}
+	if value, ok := _u.mutation.CodexRolloutBudgetUnits(); ok {
+		_spec.SetField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCodexRolloutBudgetUnits(); ok {
+		_spec.AddField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64, value)
+	}
+	if _u.mutation.CodexRolloutBudgetUnitsCleared() {
+		_spec.ClearField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.InputCost(); ok {
 		_spec.SetField(usagelog.FieldInputCost, field.TypeFloat64, value)
 	}
@@ -1531,6 +1588,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.DurationMsCleared() {
 		_spec.ClearField(usagelog.FieldDurationMs, field.TypeInt)
+	}
+	if value, ok := _u.mutation.TimingVersion(); ok {
+		_spec.SetField(usagelog.FieldTimingVersion, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTimingVersion(); ok {
+		_spec.AddField(usagelog.FieldTimingVersion, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.FirstTokenMs(); ok {
 		_spec.SetField(usagelog.FieldFirstTokenMs, field.TypeInt, value)
@@ -2314,6 +2377,33 @@ func (_u *UsageLogUpdateOne) AddAudioOutputTokens(v int) *UsageLogUpdateOne {
 	return _u
 }
 
+// SetCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field.
+func (_u *UsageLogUpdateOne) SetCodexRolloutBudgetUnits(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetCodexRolloutBudgetUnits()
+	_u.mutation.SetCodexRolloutBudgetUnits(v)
+	return _u
+}
+
+// SetNillableCodexRolloutBudgetUnits sets the "codex_rollout_budget_units" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableCodexRolloutBudgetUnits(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetCodexRolloutBudgetUnits(*v)
+	}
+	return _u
+}
+
+// AddCodexRolloutBudgetUnits adds value to the "codex_rollout_budget_units" field.
+func (_u *UsageLogUpdateOne) AddCodexRolloutBudgetUnits(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddCodexRolloutBudgetUnits(v)
+	return _u
+}
+
+// ClearCodexRolloutBudgetUnits clears the value of the "codex_rollout_budget_units" field.
+func (_u *UsageLogUpdateOne) ClearCodexRolloutBudgetUnits() *UsageLogUpdateOne {
+	_u.mutation.ClearCodexRolloutBudgetUnits()
+	return _u
+}
+
 // SetInputCost sets the "input_cost" field.
 func (_u *UsageLogUpdateOne) SetInputCost(v float64) *UsageLogUpdateOne {
 	_u.mutation.ResetInputCost()
@@ -2561,6 +2651,27 @@ func (_u *UsageLogUpdateOne) AddDurationMs(v int) *UsageLogUpdateOne {
 // ClearDurationMs clears the value of the "duration_ms" field.
 func (_u *UsageLogUpdateOne) ClearDurationMs() *UsageLogUpdateOne {
 	_u.mutation.ClearDurationMs()
+	return _u
+}
+
+// SetTimingVersion sets the "timing_version" field.
+func (_u *UsageLogUpdateOne) SetTimingVersion(v int) *UsageLogUpdateOne {
+	_u.mutation.ResetTimingVersion()
+	_u.mutation.SetTimingVersion(v)
+	return _u
+}
+
+// SetNillableTimingVersion sets the "timing_version" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableTimingVersion(v *int) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetTimingVersion(*v)
+	}
+	return _u
+}
+
+// AddTimingVersion adds value to the "timing_version" field.
+func (_u *UsageLogUpdateOne) AddTimingVersion(v int) *UsageLogUpdateOne {
+	_u.mutation.AddTimingVersion(v)
 	return _u
 }
 
@@ -3300,6 +3411,15 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	if value, ok := _u.mutation.AddedAudioOutputTokens(); ok {
 		_spec.AddField(usagelog.FieldAudioOutputTokens, field.TypeInt, value)
 	}
+	if value, ok := _u.mutation.CodexRolloutBudgetUnits(); ok {
+		_spec.SetField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCodexRolloutBudgetUnits(); ok {
+		_spec.AddField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64, value)
+	}
+	if _u.mutation.CodexRolloutBudgetUnitsCleared() {
+		_spec.ClearField(usagelog.FieldCodexRolloutBudgetUnits, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.InputCost(); ok {
 		_spec.SetField(usagelog.FieldInputCost, field.TypeFloat64, value)
 	}
@@ -3371,6 +3491,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.DurationMsCleared() {
 		_spec.ClearField(usagelog.FieldDurationMs, field.TypeInt)
+	}
+	if value, ok := _u.mutation.TimingVersion(); ok {
+		_spec.SetField(usagelog.FieldTimingVersion, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTimingVersion(); ok {
+		_spec.AddField(usagelog.FieldTimingVersion, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.FirstTokenMs(); ok {
 		_spec.SetField(usagelog.FieldFirstTokenMs, field.TypeInt, value)

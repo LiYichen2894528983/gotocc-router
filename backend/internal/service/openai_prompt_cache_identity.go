@@ -189,6 +189,10 @@ func openAIPromptCacheIdentityScope(c *gin.Context, account *Account) string {
 }
 
 func setOpenAIUpstreamSessionIdentity(headers http.Header, identity string) {
+	setOpenAIUpstreamSessionIdentityForAccount(headers, nil, identity)
+}
+
+func setOpenAIUpstreamSessionIdentityForAccount(headers http.Header, account *Account, identity string) {
 	if headers == nil {
 		return
 	}
@@ -196,10 +200,27 @@ func setOpenAIUpstreamSessionIdentity(headers http.Header, identity string) {
 	if identity == "" {
 		return
 	}
-	// session-id is the current Codex spelling. Keep the underscore alias for
-	// older ChatGPT-compatible relays while both carry the same value.
 	headers.Set(codexSessionIDHeader, identity)
+	if account != nil && account.UsesOpenAICodexProtocol() {
+		// Codex 协议出站只携带官方 session-id（官方 build_session_headers 仅有
+		// hyphen 形态）；下划线别名与 conversation_id 由统一清理移除。
+		clearOpenAICodexLegacySessionAliases(headers, account)
+		return
+	}
+	// 非 Codex 兼容供应商路径保留 Plus 双写约定（session-id + session_id）。
 	headers.Set("session_id", identity)
+}
+
+// clearOpenAICodexLegacySessionAliases drops unofficial session header aliases
+// on Codex-protocol paths. `conversation_id` is never an official Codex header
+// and the legacy `session_id` alias is not part of the official wire format,
+// so both are removed for every Codex account regardless of fingerprint mode.
+func clearOpenAICodexLegacySessionAliases(headers http.Header, account *Account) {
+	if headers == nil || account == nil || !account.UsesOpenAICodexProtocol() {
+		return
+	}
+	headers.Del("conversation_id")
+	headers.Del("session_id")
 }
 
 // alignOpenAIUpstreamSessionIdentityFromBody makes the finalized Responses
@@ -220,14 +241,14 @@ func (s *OpenAIGatewayService) alignOpenAIUpstreamSessionIdentityFromBody( //nol
 		// The compact endpoint owns its session namespace and the Plus contract
 		// keeps the client key opaque. Do not hash or rewrite it through the
 		// ordinary Responses cache identity layer.
-		setOpenAIUpstreamSessionIdentity(headers, promptCacheKey)
+		setOpenAIUpstreamSessionIdentityForAccount(headers, account, promptCacheKey)
 		return nil
 	}
 	identity, err := s.resolveOpenAIUpstreamPromptCacheHeaderIdentity(c, account, promptCacheKey)
 	if err != nil {
 		return fmt.Errorf("resolve prompt cache header identity: %w", err)
 	}
-	setOpenAIUpstreamSessionIdentity(headers, identity)
+	setOpenAIUpstreamSessionIdentityForAccount(headers, account, identity)
 	return nil
 }
 
@@ -244,7 +265,7 @@ func shouldPreserveOpenAIPromptCacheOptions(account *Account, effectiveModel str
 	return account != nil &&
 		account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeAPIKey &&
-		isOpenAIGPT56Model(effectiveModel)
+		(isOpenAIGPT6Model(effectiveModel) || isOpenAIGPT56Model(effectiveModel))
 }
 
 func normalizeOpenAIPromptCacheControlsForAccount(body []byte, account *Account, effectiveModel string) ([]byte, bool, error) {

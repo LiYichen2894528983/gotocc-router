@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -28,12 +29,14 @@ const openAIVideoTaskColumns = `
 	upstream_endpoint, model_mapping_chain, user_agent, ip_address, retry_count,
 	next_poll_at, lease_until, lease_token, last_error_code, last_error_message,
 	usage_recorded, created_at, updated_at, submitted_at, finished_at,
-	settled_at, usage_recorded_at`
+	settled_at, usage_recorded_at, provider_config, reseller_snapshot, team_wallet`
 
 type openAIVideoTaskScanner interface{ Scan(dest ...any) error }
 
 func scanOpenAIVideoTask(row openAIVideoTaskScanner) (*service.OpenAIVideoTask, error) {
 	task := &service.OpenAIVideoTask{}
+	var providerConfig []byte
+	var resellerJSON []byte
 	err := row.Scan(
 		&task.ID, &task.LocalRequestID, &task.TaskID, &task.ActorUserID,
 		&task.BillingUserID, &task.TeamID, &task.APIKeyID, &task.GroupID,
@@ -47,10 +50,16 @@ func scanOpenAIVideoTask(row openAIVideoTaskScanner) (*service.OpenAIVideoTask, 
 		&task.IPAddress, &task.RetryCount, &task.NextPollAt, &task.LeaseUntil,
 		&task.LeaseToken, &task.LastErrorCode, &task.LastErrorMessage,
 		&task.UsageRecorded, &task.CreatedAt, &task.UpdatedAt, &task.SubmittedAt,
-		&task.FinishedAt, &task.SettledAt, &task.UsageRecordedAt,
+		&task.FinishedAt, &task.SettledAt, &task.UsageRecordedAt, &providerConfig, &resellerJSON, &task.TeamWallet,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrOpenAIVideoTaskNotFound
+	}
+	if err == nil && len(resellerJSON) > 0 {
+		err = json.Unmarshal(resellerJSON, &task.ResellerSnapshot)
+	}
+	if err == nil && len(providerConfig) > 0 {
+		err = json.Unmarshal(providerConfig, &task.ProviderConfig)
 	}
 	return task, err
 }
@@ -59,6 +68,14 @@ func (r *openAIVideoTaskRepository) Create(ctx context.Context, p service.Create
 	if r == nil || r.db == nil {
 		return nil, errors.New("openai video task repository db is nil")
 	}
+	resellerJSON, err := json.Marshal(p.ResellerSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	providerConfig, err := json.Marshal(p.ProviderConfig)
+	if err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO openai_video_tasks (
 			local_request_id, actor_user_id, billing_user_id, team_id, api_key_id,
@@ -66,10 +83,10 @@ func (r *openAIVideoTaskRepository) Create(ctx context.Context, p service.Create
 			upstream_model, request_seconds, resolution, billing_mode, billing_type, total_cost,
 			hold_amount, group_rate_multiplier, account_rate_multiplier,
 			request_payload_hash, inbound_endpoint, upstream_endpoint,
-			model_mapping_chain, user_agent, ip_address, next_poll_at
+			model_mapping_chain, user_agent, ip_address, next_poll_at, provider_config, reseller_snapshot, team_wallet
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-			$19,$20,$21,$22,$23,$24,$25,$26
+			$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
 		)
 		RETURNING `+openAIVideoTaskColumns,
 		strings.TrimSpace(p.LocalRequestID), p.ActorUserID, p.BillingUserID,
@@ -80,7 +97,7 @@ func (r *openAIVideoTaskRepository) Create(ctx context.Context, p service.Create
 		p.HoldAmount, p.GroupRateMultiplier, p.AccountRateMultiplier,
 		strings.TrimSpace(p.RequestPayloadHash), strings.TrimSpace(p.InboundEndpoint),
 		strings.TrimSpace(p.UpstreamEndpoint), p.ModelMappingChain, p.UserAgent,
-		p.IPAddress, p.NextPollAt,
+		p.IPAddress, p.NextPollAt, providerConfig, resellerJSON, p.TeamWallet,
 	)
 	return scanOpenAIVideoTask(row)
 }
@@ -118,8 +135,12 @@ func (r *openAIVideoTaskRepository) BindUpstreamTask(ctx context.Context, localR
 }
 
 func (r *openAIVideoTaskRepository) GetByTaskIDForAPIKey(ctx context.Context, taskID string, apiKeyID int64) (*service.OpenAIVideoTask, error) {
+	// New declarative tasks expose a local ID; existing OpenAI-compatible
+	// providers (including another gateway) may use that same prefix upstream.
 	row := r.db.QueryRowContext(ctx, `SELECT `+openAIVideoTaskColumns+`
-		FROM openai_video_tasks WHERE task_id=$1 AND api_key_id=$2`, strings.TrimSpace(taskID), apiKeyID)
+ FROM openai_video_tasks WHERE api_key_id=$2 AND
+ (task_id=$1 OR (local_request_id=$1 AND provider_config->>'protocol'='yingce'))
+ ORDER BY CASE WHEN local_request_id=$1 AND provider_config->>'protocol'='yingce' THEN 0 ELSE 1 END,id DESC LIMIT 1`, strings.TrimSpace(taskID), apiKeyID)
 	return scanOpenAIVideoTask(row)
 }
 
@@ -187,6 +208,7 @@ func (r *openAIVideoTaskRepository) RecordPollState(ctx context.Context, id int6
 func (r *openAIVideoTaskRepository) RecordPollError(ctx context.Context, id int64, leaseToken, code, message string, nextPollAt time.Time) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE openai_video_tasks SET retry_count=retry_count+1,
+			status=CASE WHEN status='completed' AND billing_status<>'captured' THEN 'processing' ELSE status END,
 			last_error_code=$3, last_error_message=$4, next_poll_at=$5,
 			lease_until=NULL, lease_token=NULL, updated_at=NOW()
 		WHERE id=$1 AND lease_token=$2`, id, leaseToken,

@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package handler
 
 import (
@@ -23,11 +25,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
-
-type asyncImageMemoryStore struct {
-	mu    sync.RWMutex
-	tasks map[string]*service.ImageTaskRecord
-}
 
 type asyncImageObjectRepository struct {
 	object service.ImageObjectRecord
@@ -183,43 +180,6 @@ func (h *asyncImageMemoryHistory) Get(_ context.Context, owner service.ImageTask
 	return &copy, nil
 }
 
-func (h *asyncImageMemoryHistory) ListByUser(_ context.Context, userID int64, filter service.ImageTaskHistoryFilter) ([]*service.ImageTaskRecord, bool, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if filter.Limit <= 0 {
-		filter.Limit = 20
-	}
-	matched := make([]*service.ImageTaskRecord, 0, len(h.order))
-	for i := len(h.order) - 1; i >= 0; i-- {
-		task := h.tasks[h.order[i]]
-		if task == nil || task.UserID != userID || (filter.Status != "" && task.Status != filter.Status) {
-			continue
-		}
-		copy := *task
-		matched = append(matched, &copy)
-	}
-	if filter.Offset >= len(matched) {
-		return nil, false, nil
-	}
-	matched = matched[filter.Offset:]
-	hasMore := len(matched) > filter.Limit
-	if hasMore {
-		matched = matched[:filter.Limit]
-	}
-	return matched, hasMore, nil
-}
-
-func (h *asyncImageMemoryHistory) GetByUser(_ context.Context, userID int64, id string) (*service.ImageTaskRecord, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	task := h.tasks[id]
-	if task == nil || task.UserID != userID {
-		return nil, service.ErrImageTaskNotFound
-	}
-	copy := *task
-	return &copy, nil
-}
-
 func (h *asyncImageMemoryHistory) DeleteFailed(_ context.Context, owner service.ImageTaskOwner, id string) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -229,43 +189,6 @@ func (h *asyncImageMemoryHistory) DeleteFailed(_ context.Context, owner service.
 	}
 	delete(h.tasks, id)
 	return true, nil
-}
-
-func (s *asyncImageMemoryStore) Save(_ context.Context, task *service.ImageTaskRecord, _ time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	copy := *task
-	copy.Result = append(json.RawMessage(nil), task.Result...)
-	copy.Error = append(json.RawMessage(nil), task.Error...)
-	s.tasks[task.ID] = &copy
-	return nil
-}
-
-func (s *asyncImageMemoryStore) Get(_ context.Context, id string) (*service.ImageTaskRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	task := s.tasks[id]
-	if task == nil {
-		return nil, service.ErrImageTaskNotFound
-	}
-	copy := *task
-	copy.Result = append(json.RawMessage(nil), task.Result...)
-	copy.Error = append(json.RawMessage(nil), task.Error...)
-	return &copy, nil
-}
-
-func (s *asyncImageMemoryStore) DeleteIfStatus(_ context.Context, id, status string) (bool, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	task, exists := s.tasks[id]
-	if !exists {
-		return false, false, nil
-	}
-	if task.Status != status {
-		return false, true, nil
-	}
-	delete(s.tasks, id)
-	return true, true, nil
 }
 
 func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
@@ -349,36 +272,30 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 	require.Equal(t, service.ImageTaskStatusCompleted, list.Data[0].Status)
 }
 
-func TestAsyncImageHandlerAdminSupportReadsTargetWithoutAPIKeyCredential(t *testing.T) {
+func TestAsyncImageHandlerSupportUsesSameKeyScopedRead(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	history := &asyncImageMemoryHistory{
-		tasks: map[string]*service.ImageTaskRecord{
-			"target": {
-				ID: "target", UserID: 7, APIKeyID: 99, Status: service.ImageTaskStatusCompleted,
-				Result: json.RawMessage(`{"data":[{"url":"https://example.test/target.png"}]}`), CreatedAt: 10,
-			},
-			"other": {ID: "other", UserID: 8, APIKeyID: 100, Status: service.ImageTaskStatusCompleted, CreatedAt: 20},
-		},
-		order: []string{"target", "other"},
-	}
-	tasks := service.NewImageTaskService(&asyncImageMemoryStore{tasks: make(map[string]*service.ImageTaskRecord)})
+	history := &asyncImageMemoryHistory{tasks: map[string]*service.ImageTaskRecord{
+		"target": {ID: "target", UserID: 7, APIKeyID: 99, Status: service.ImageTaskStatusCompleted, Result: json.RawMessage(`{"data":[{"url":"https://example.test/target.png"}]}`), CreatedAt: 10},
+		"other":  {ID: "other", UserID: 8, APIKeyID: 100, Status: service.ImageTaskStatusCompleted, CreatedAt: 20},
+	}, order: []string{"target", "other"}}
+	tasks := service.NewImageTaskService(&asyncImageMemoryStore{tasks: history.tasks})
 	tasks.SetHistoryRepository(history)
 	h := &AsyncImageHandler{tasks: tasks}
 	router := gin.New()
-	router.GET("/api/v1/admin/support/users/:user_id/async-images", h.AdminSupportList)
-	router.GET("/api/v1/admin/support/users/:user_id/async-images/:task_id", h.AdminSupportGet)
-
-	listWriter := httptest.NewRecorder()
-	router.ServeHTTP(listWriter, httptest.NewRequest(http.MethodGet, "/api/v1/admin/support/users/7/async-images", nil))
-	require.Equal(t, http.StatusOK, listWriter.Code)
-	require.Contains(t, listWriter.Body.String(), `"api_key_id":99`)
-	require.Contains(t, listWriter.Body.String(), "target.png")
-	require.NotContains(t, listWriter.Body.String(), "other")
-	require.NotContains(t, listWriter.Body.String(), "storage_keys")
-
-	detailWriter := httptest.NewRecorder()
-	router.ServeHTTP(detailWriter, httptest.NewRequest(http.MethodGet, "/api/v1/admin/support/users/8/async-images/target", nil))
-	require.Equal(t, http.StatusNotFound, detailWriter.Code)
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 99, UserID: 7})
+	})
+	router.GET("/support/images/tasks", h.List)
+	router.GET("/support/images/tasks/:task_id", h.Get)
+	list := httptest.NewRecorder()
+	router.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/support/images/tasks", nil))
+	require.Equal(t, http.StatusOK, list.Code)
+	require.Contains(t, list.Body.String(), "target.png")
+	require.NotContains(t, list.Body.String(), "other")
+	require.NotContains(t, list.Body.String(), "storage_keys")
+	forbidden := httptest.NewRecorder()
+	router.ServeHTTP(forbidden, httptest.NewRequest(http.MethodGet, "/support/images/tasks/other", nil))
+	require.Equal(t, http.StatusNotFound, forbidden.Code)
 	require.Len(t, history.tasks, 2)
 }
 
@@ -744,12 +661,12 @@ func TestValidateAsyncImageEditUploadLimits(t *testing.T) {
 		return writer.FormDataContentType(), body.Bytes()
 	}
 
-	contentType, body := makeMultipart(t, asyncImageEditMaxInputImages+1, asyncImageTestPNG)
-	err := validateAsyncImageEditUploadLimits("/v1/images/edits/async", contentType, body)
+	contentType, body := makeMultipart(t, 17, asyncImageTestPNG)
+	err := validateAsyncImageEditUploadLimits("/v1/images/edits/async", contentType, body, 16)
 	require.ErrorIs(t, err, errAsyncImageEditTooManyInputImages)
 
 	contentType, body = makeMultipart(t, 1, bytes.Repeat([]byte("a"), int(service.OpenAIImageMaxUploadPartBytes)+1))
-	err = validateAsyncImageEditUploadLimits("/v1/images/edits/async", contentType, body)
+	err = validateAsyncImageEditUploadLimits("/v1/images/edits/async", contentType, body, 16)
 	var tooLarge *service.OpenAIImageUploadTooLargeError
 	require.True(t, errors.As(err, &tooLarge))
 	require.Equal(t, service.OpenAIImageMaxUploadPartBytes, tooLarge.Limit)
@@ -765,7 +682,7 @@ func TestValidateAsyncImageEditUploadLimits(t *testing.T) {
 	_, createErr = mask.Write(asyncImageTestPNGWithDimensions(t, 2, 1))
 	require.NoError(t, createErr)
 	require.NoError(t, writer.Close())
-	err = validateAsyncImageEditUploadLimits("/v1/images/edits/async", writer.FormDataContentType(), mismatchedMask.Bytes())
+	err = validateAsyncImageEditUploadLimits("/v1/images/edits/async", writer.FormDataContentType(), mismatchedMask.Bytes(), 16)
 	require.ErrorIs(t, err, errAsyncImageEditMaskSizeMismatch)
 }
 

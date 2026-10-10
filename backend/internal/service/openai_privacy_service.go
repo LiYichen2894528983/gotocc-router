@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/openai"
 	"github.com/imroc/req/v3"
 )
 
@@ -22,22 +24,9 @@ const (
 	PrivacyModeCFBlocked   = "training_set_cf_blocked"
 )
 
-func shouldSkipOpenAIPrivacyEnsure(extra map[string]any) bool {
-	if extra == nil {
-		return false
-	}
-	raw, ok := extra["privacy_mode"]
-	if !ok {
-		return false
-	}
-	mode, _ := raw.(string)
-	mode = strings.TrimSpace(mode)
-	return mode != PrivacyModeFailed && mode != PrivacyModeCFBlocked
-}
-
 // disableOpenAITraining calls ChatGPT settings API to turn off "Improve the model for everyone".
 // Returns privacy_mode value: "training_off" on success, "cf_blocked" / "failed" on failure.
-func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL string, identity openAIOutboundIdentity) string {
+func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL, chatGPTAccountID string, identity openAIOutboundIdentity) string {
 	if accessToken == "" || clientFactory == nil {
 		return ""
 	}
@@ -52,18 +41,17 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 	}
 
 	identity = normalizeOpenAIPrivacyIdentity(identity)
-	resp, err := client.R().
+	request := applyReqCodexResidency(ctx, client.R()).
 		SetContext(ctx).
 		SetHeader("Authorization", "Bearer "+accessToken).
 		SetHeader("User-Agent", identity.UserAgent).
-		SetHeader("Originator", identity.Originator).
-		SetHeader("Version", identity.Version).
-		SetHeader("Origin", "https://chatgpt.com").
-		SetHeader("Referer", "https://chatgpt.com/").
-		SetHeader("Accept", "application/json").
-		SetHeader("sec-fetch-mode", "cors").
-		SetHeader("sec-fetch-site", "same-origin").
-		SetHeader("sec-fetch-dest", "empty").
+		SetHeader("Accept", "application/json")
+	// Official backend-client sends ChatGPT-Account-Id when it is known and
+	// never sends Originator/Version on the chatgpt.com backend surface.
+	if chatGPTAccountID = strings.TrimSpace(chatGPTAccountID); chatGPTAccountID != "" {
+		request = request.SetHeader("ChatGPT-Account-Id", chatGPTAccountID)
+	}
+	resp, err := request.
 		SetQueryParam("feature", "training_allowed").
 		SetQueryParam("value", "false").
 		Patch(openAISettingsURL)
@@ -75,7 +63,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	if resp.StatusCode == 403 || resp.StatusCode == 503 {
 		body := resp.String()
-		if strings.Contains(body, "cloudflare") || strings.Contains(body, "cf-") || strings.Contains(body, "Just a moment") {
+		if isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), body) {
 			slog.Warn("openai_privacy_cf_blocked", "status", resp.StatusCode)
 			return PrivacyModeCFBlocked
 		}
@@ -90,6 +78,34 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 	return PrivacyModeTrainingOff
 }
 
+func applyReqCodexResidency(ctx context.Context, request *req.Request) *req.Request {
+	if request == nil {
+		return nil
+	}
+	if value := openai.CodexResidencyFromContext(ctx); value != "" {
+		return request.SetHeader(openai.CodexResidencyHeader, value)
+	}
+	return request
+}
+
+// applyCodexResidencyHeader 是 applyReqCodexResidency 的 net/http 版本，供非
+// req 客户端（PAT whoami 等官方 auth 面请求）复用同一套 residency 语义。
+func applyCodexResidencyHeader(ctx context.Context, headers http.Header) {
+	if headers == nil {
+		return
+	}
+	openai.ApplyCodexResidencyHeader(headers, openai.CodexResidencyFromContext(ctx))
+}
+
+// isCloudflareChallengeResponse 判断 chatgpt.com 返回的是否为 Cloudflare 质询/拦截页。
+// 优先看 cf-mitigated 响应头（质询时为 "challenge"），再回退到正文关键字。
+func isCloudflareChallengeResponse(cfMitigated, body string) bool {
+	if strings.EqualFold(strings.TrimSpace(cfMitigated), "challenge") {
+		return true
+	}
+	return strings.Contains(body, "cloudflare") || strings.Contains(body, "cf-") || strings.Contains(body, "Just a moment")
+}
+
 // ChatGPTAccountInfo 从 chatgpt.com/backend-api/accounts/check 获取的账号信息
 type ChatGPTAccountInfo struct {
 	PlanType string
@@ -102,7 +118,7 @@ type ChatGPTAccountInfo struct {
 }
 
 var (
-	chatGPTAccountsCheckURL = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
+	chatGPTAccountsCheckURL = "https://chatgpt.com/backend-api/wham/accounts/check"
 	chatGPTSubscriptionsURL = "https://chatgpt.com/backend-api/subscriptions"
 )
 
@@ -126,25 +142,28 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 
 	identity = normalizeOpenAIPrivacyIdentity(identity)
 	var result map[string]any
-	resp, err := client.R().
+	request := applyReqCodexResidency(ctx, client.R()).
 		SetContext(ctx).
 		SetHeader("Authorization", "Bearer "+accessToken).
 		SetHeader("User-Agent", identity.UserAgent).
-		SetHeader("Originator", identity.Originator).
-		SetHeader("Version", identity.Version).
-		SetHeader("Origin", "https://chatgpt.com").
-		SetHeader("Referer", "https://chatgpt.com/").
-		SetHeader("Accept", "application/json").
+		SetHeader("Accept", "application/json")
+	// 官方 backend-client/src/client.rs:269-288 在已知账号时发
+	// ChatGPT-Account-Id，用于在多账号/工作区里精确定位；orgID（access_token
+	// JWT 的 poid）正是 accounts map 的键。
+	if accountID := strings.TrimSpace(orgID); accountID != "" {
+		request = request.SetHeader("ChatGPT-Account-Id", accountID)
+	}
+	resp, err := request.
 		SetSuccessResult(&result).
 		Get(chatGPTAccountsCheckURL)
 
 	if err != nil {
-		slog.Debug("chatgpt_account_check_request_error", "error", err.Error())
+		slog.Warn("chatgpt_account_check_request_error", "error", err.Error())
 		return nil
 	}
 
 	if !resp.IsSuccessState() {
-		slog.Debug("chatgpt_account_check_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
+		slog.Warn("chatgpt_account_check_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()), "body", truncate(resp.String(), 200))
 		return nil
 	}
 
@@ -246,24 +265,20 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 		WillRenew   bool   `json:"will_renew"`
 		ID          string `json:"id"`
 	}
-	resp, err := client.R().
+	resp, err := applyReqCodexResidency(ctx, client.R()).
 		SetContext(ctx).
 		SetHeader("Authorization", "Bearer "+accessToken).
 		SetHeader("User-Agent", identity.UserAgent).
-		SetHeader("Originator", identity.Originator).
-		SetHeader("Version", identity.Version).
-		SetHeader("Origin", "https://chatgpt.com").
-		SetHeader("Referer", "https://chatgpt.com/").
 		SetHeader("Accept", "application/json").
 		SetSuccessResult(&result).
 		SetQueryParam("account_id", accountID).
 		Get(chatGPTSubscriptionsURL)
 	if err != nil {
-		slog.Debug("chatgpt_subscription_request_error", "error", err.Error())
+		slog.Warn("chatgpt_subscription_request_error", "error", err.Error())
 		return ""
 	}
 	if !resp.IsSuccessState() {
-		slog.Debug("chatgpt_subscription_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
+		slog.Warn("chatgpt_subscription_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()), "body", truncate(resp.String(), 200))
 		return ""
 	}
 
@@ -282,6 +297,21 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 }
 
 func normalizeOpenAIPrivacyIdentity(identity openAIOutboundIdentity) openAIOutboundIdentity {
+	// A policy-approved snapshot already carries its source and compatibility
+	// decision. Reclassifying it with the default policy changes legacy families
+	// and incorrectly relabels global identities as account identities.
+	trustedSource := identity.Source == openAIOutboundIdentitySourceAccount || identity.Source == openAIOutboundIdentitySourceGlobal || identity.Source == openAIOutboundIdentitySourceDefault
+	if trustedSource {
+		allowLegacy := identity.Source != openAIOutboundIdentitySourceDefault
+		// Version synchronization can enlarge a maximum-length configured UA,
+		// and outbound version syntax retains its historical normalization rules.
+		// Validate the selected family independently of those version declarations.
+		familyUA := openai.SetCodexUserAgentVersion(identity.UserAgent, DefaultOpenAICodexVersion)
+		parsed, _, validFamily := openai.PairConfiguredCodexClientIdentity(familyUA, allowLegacy)
+		if validFamily && parsed.Originator == identity.Originator && NormalizeCodexClientVersion(identity.Version) != "" && openAIOutboundIdentityVersion(identity.UserAgent) == identity.Version {
+			return identity
+		}
+	}
 	return resolveOpenAIOutboundIdentityWithVersion(identity.UserAgent, "", identity.Version)
 }
 

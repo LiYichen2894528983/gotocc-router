@@ -23,6 +23,9 @@ func ProvideAdminHandlers(
 	geminiOAuthHandler *admin.GeminiOAuthHandler,
 	antigravityOAuthHandler *admin.AntigravityOAuthHandler,
 	grokOAuthHandler *admin.GrokOAuthHandler,
+	zhipuOAuthHandler *admin.ZhipuOAuthHandler,
+	cnOAuthHandler *admin.CNOAuthHandler,
+	cnOAuthService *service.CNOAuthService,
 	cnProviderHandler *admin.CNProviderHandler,
 	proxyHandler *admin.ProxyHandler,
 	redeemHandler *admin.RedeemHandler,
@@ -50,11 +53,17 @@ func ProvideAdminHandlers(
 	auditLogHandler *admin.AuditLogHandler,
 	ipAccessControlHandler *admin.IPAccessControlHandler,
 	teamHandler *admin.TeamHandler,
+	canvasBridgeHandler *admin.CanvasBridgeHandler,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	usageAlert *service.UsageAlertService,
+	opencodeGoUsage *service.OpenCodeGoUsageService,
+	claudeResetCredits *service.ClaudeResetCreditService,
 ) *AdminHandlers {
+	accountHandler.SetCNOAuthService(cnOAuthService)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetUsageAlertService(usageAlert)
+	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
+	accountHandler.SetClaudeResetCreditService(claudeResetCredits)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
@@ -68,6 +77,8 @@ func ProvideAdminHandlers(
 		GeminiOAuth:            geminiOAuthHandler,
 		AntigravityOAuth:       antigravityOAuthHandler,
 		GrokOAuth:              grokOAuthHandler,
+		ZhipuOAuth:             zhipuOAuthHandler,
+		CNOAuth:                cnOAuthHandler,
 		CNProvider:             cnProviderHandler,
 		Proxy:                  proxyHandler,
 		Redeem:                 redeemHandler,
@@ -95,6 +106,7 @@ func ProvideAdminHandlers(
 		AuditLog:               auditLogHandler,
 		IPAccessControl:        ipAccessControlHandler,
 		Team:                   teamHandler,
+		CanvasBridge:           canvasBridgeHandler,
 	}
 }
 
@@ -162,6 +174,7 @@ func ProvideGatewayHandler(
 }
 
 func ProvideOpenAIGatewayHandler(
+	resellerService *service.ResellerService,
 	autoGroupResolver *service.AutoGroupResolver,
 	gatewayService *service.OpenAIGatewayService,
 	pluginManager *service.PluginManager,
@@ -177,11 +190,14 @@ func ProvideOpenAIGatewayHandler(
 	clientDisconnectRisk *service.ClientDisconnectRiskService,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
+	compositeResolver *service.CompositeRouteResolver,
 ) *OpenAIGatewayHandler {
 	gatewayService.SetPluginManager(pluginManager)
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
+	h.compositeResolver = compositeResolver
 	h.securityAuditCoordinator = coordinator
+	h.resellerService = resellerService
 	h.grokMediaEligibilityProber = grokQuotaService
 	h.autoGroupResolver = autoGroupResolver
 	h.SetIPAccessControlService(ipAccessControl)
@@ -233,6 +249,8 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
+	agentHandler *AgentHandler,
+	resellerHandler *ResellerHandler,
 	authHandler *AuthHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
@@ -242,6 +260,7 @@ func ProvideHandlers(
 	announcementHandler *AnnouncementHandler,
 	channelMonitorUserHandler *ChannelMonitorUserHandler,
 	channelMonitorV2Handler *ChannelMonitorV2Handler,
+	channelMonitorV3Handler *ChannelMonitorV3Handler,
 	marketplaceStatsHandler *MarketplaceStatsHandler,
 	adminHandlers *AdminHandlers,
 	gatewayHandler *GatewayHandler,
@@ -261,6 +280,8 @@ func ProvideHandlers(
 	_ *service.OpenAIQuotaAutoResetService,
 ) *Handlers {
 	return &Handlers{
+		Agent:            agentHandler,
+		Reseller:         resellerHandler,
 		Auth:             authHandler,
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
@@ -270,6 +291,7 @@ func ProvideHandlers(
 		Announcement:     announcementHandler,
 		ChannelMonitor:   channelMonitorUserHandler,
 		ChannelMonitorV2: channelMonitorV2Handler,
+		ChannelMonitorV3: channelMonitorV3Handler,
 		MarketplaceStats: marketplaceStatsHandler,
 		Admin:            adminHandlers,
 		Gateway:          gatewayHandler,
@@ -289,6 +311,8 @@ func ProvideHandlers(
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
+	NewAgentHandler,
+	NewResellerHandler,
 	// Top-level handlers
 	ProvideAuthHandler,
 	NewUserHandler,
@@ -299,6 +323,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementHandler,
 	NewChannelMonitorUserHandler,
 	NewChannelMonitorV2Handler,
+	NewChannelMonitorV3Handler,
 	NewMarketplaceStatsHandler,
 	ProvideGatewayHandler,
 	ProvideOpenAIGatewayHandler,
@@ -316,7 +341,7 @@ var ProviderSet = wire.NewSet(
 	// Admin handlers
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
-	admin.NewGroupHandler,
+	admin.NewGroupHandlerWithConfig,
 	admin.ProvideAccountHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,
@@ -326,6 +351,8 @@ var ProviderSet = wire.NewSet(
 	admin.NewGeminiOAuthHandler,
 	admin.NewAntigravityOAuthHandler,
 	admin.NewGrokOAuthHandler,
+	admin.NewZhipuOAuthHandler,
+	admin.NewCNOAuthHandler,
 	admin.NewCNProviderHandler,
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,
@@ -352,6 +379,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAuditLogHandler,
 	admin.NewIPAccessControlHandler,
 	admin.NewTeamHandler,
+	admin.NewCanvasBridgeHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

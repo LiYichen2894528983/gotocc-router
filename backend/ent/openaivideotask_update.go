@@ -13,6 +13,8 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/LuckyKuang/sub2api-plus/ent/openaivideotask"
 	"github.com/LuckyKuang/sub2api-plus/ent/predicate"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/reseller"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
 )
 
 // OpenAIVideoTaskUpdate is the builder for updating OpenAIVideoTask entities.
@@ -25,6 +27,44 @@ type OpenAIVideoTaskUpdate struct {
 // Where appends a list predicates to the OpenAIVideoTaskUpdate builder.
 func (_u *OpenAIVideoTaskUpdate) Where(ps ...predicate.OpenAIVideoTask) *OpenAIVideoTaskUpdate {
 	_u.mutation.Where(ps...)
+	return _u
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (_u *OpenAIVideoTaskUpdate) SetResellerSnapshot(v *reseller.Snapshot) *OpenAIVideoTaskUpdate {
+	_u.mutation.SetResellerSnapshot(v)
+	return _u
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (_u *OpenAIVideoTaskUpdate) ClearResellerSnapshot() *OpenAIVideoTaskUpdate {
+	_u.mutation.ClearResellerSnapshot()
+	return _u
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (_u *OpenAIVideoTaskUpdate) SetTeamWallet(v bool) *OpenAIVideoTaskUpdate {
+	_u.mutation.SetTeamWallet(v)
+	return _u
+}
+
+// SetNillableTeamWallet sets the "team_wallet" field if the given value is not nil.
+func (_u *OpenAIVideoTaskUpdate) SetNillableTeamWallet(v *bool) *OpenAIVideoTaskUpdate {
+	if v != nil {
+		_u.SetTeamWallet(*v)
+	}
+	return _u
+}
+
+// SetProviderConfig sets the "provider_config" field.
+func (_u *OpenAIVideoTaskUpdate) SetProviderConfig(v *videoprotocol.Config) *OpenAIVideoTaskUpdate {
+	_u.mutation.SetProviderConfig(v)
+	return _u
+}
+
+// ClearProviderConfig clears the value of the "provider_config" field.
+func (_u *OpenAIVideoTaskUpdate) ClearProviderConfig() *OpenAIVideoTaskUpdate {
+	_u.mutation.ClearProviderConfig()
 	return _u
 }
 
@@ -871,6 +911,11 @@ func (_u *OpenAIVideoTaskUpdate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *OpenAIVideoTaskUpdate) check() error {
+	if v, ok := _u.mutation.ProviderConfig(); ok {
+		if err := v.Validate(); err != nil {
+			return &ValidationError{Name: "provider_config", err: fmt.Errorf(`ent: validator failed for field "OpenAIVideoTask.provider_config": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TaskID(); ok {
 		if err := openaivideotask.TaskIDValidator(v); err != nil {
 			return &ValidationError{Name: "task_id", err: fmt.Errorf(`ent: validator failed for field "OpenAIVideoTask.task_id": %w`, err)}
@@ -960,6 +1005,21 @@ func (_u *OpenAIVideoTaskUpdate) sqlSave(ctx context.Context) (_node int, err er
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.ResellerSnapshot(); ok {
+		_spec.SetField(openaivideotask.FieldResellerSnapshot, field.TypeJSON, value)
+	}
+	if _u.mutation.ResellerSnapshotCleared() {
+		_spec.ClearField(openaivideotask.FieldResellerSnapshot, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.TeamWallet(); ok {
+		_spec.SetField(openaivideotask.FieldTeamWallet, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ProviderConfig(); ok {
+		_spec.SetField(openaivideotask.FieldProviderConfig, field.TypeJSON, value)
+	}
+	if _u.mutation.ProviderConfigCleared() {
+		_spec.ClearField(openaivideotask.FieldProviderConfig, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.TaskID(); ok {
 		_spec.SetField(openaivideotask.FieldTaskID, field.TypeString, value)
@@ -1207,6 +1267,44 @@ type OpenAIVideoTaskUpdateOne struct {
 	fields   []string
 	hooks    []Hook
 	mutation *OpenAIVideoTaskMutation
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (_u *OpenAIVideoTaskUpdateOne) SetResellerSnapshot(v *reseller.Snapshot) *OpenAIVideoTaskUpdateOne {
+	_u.mutation.SetResellerSnapshot(v)
+	return _u
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (_u *OpenAIVideoTaskUpdateOne) ClearResellerSnapshot() *OpenAIVideoTaskUpdateOne {
+	_u.mutation.ClearResellerSnapshot()
+	return _u
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (_u *OpenAIVideoTaskUpdateOne) SetTeamWallet(v bool) *OpenAIVideoTaskUpdateOne {
+	_u.mutation.SetTeamWallet(v)
+	return _u
+}
+
+// SetNillableTeamWallet sets the "team_wallet" field if the given value is not nil.
+func (_u *OpenAIVideoTaskUpdateOne) SetNillableTeamWallet(v *bool) *OpenAIVideoTaskUpdateOne {
+	if v != nil {
+		_u.SetTeamWallet(*v)
+	}
+	return _u
+}
+
+// SetProviderConfig sets the "provider_config" field.
+func (_u *OpenAIVideoTaskUpdateOne) SetProviderConfig(v *videoprotocol.Config) *OpenAIVideoTaskUpdateOne {
+	_u.mutation.SetProviderConfig(v)
+	return _u
+}
+
+// ClearProviderConfig clears the value of the "provider_config" field.
+func (_u *OpenAIVideoTaskUpdateOne) ClearProviderConfig() *OpenAIVideoTaskUpdateOne {
+	_u.mutation.ClearProviderConfig()
+	return _u
 }
 
 // SetTaskID sets the "task_id" field.
@@ -2065,6 +2163,11 @@ func (_u *OpenAIVideoTaskUpdateOne) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *OpenAIVideoTaskUpdateOne) check() error {
+	if v, ok := _u.mutation.ProviderConfig(); ok {
+		if err := v.Validate(); err != nil {
+			return &ValidationError{Name: "provider_config", err: fmt.Errorf(`ent: validator failed for field "OpenAIVideoTask.provider_config": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TaskID(); ok {
 		if err := openaivideotask.TaskIDValidator(v); err != nil {
 			return &ValidationError{Name: "task_id", err: fmt.Errorf(`ent: validator failed for field "OpenAIVideoTask.task_id": %w`, err)}
@@ -2171,6 +2274,21 @@ func (_u *OpenAIVideoTaskUpdateOne) sqlSave(ctx context.Context) (_node *OpenAIV
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.ResellerSnapshot(); ok {
+		_spec.SetField(openaivideotask.FieldResellerSnapshot, field.TypeJSON, value)
+	}
+	if _u.mutation.ResellerSnapshotCleared() {
+		_spec.ClearField(openaivideotask.FieldResellerSnapshot, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.TeamWallet(); ok {
+		_spec.SetField(openaivideotask.FieldTeamWallet, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ProviderConfig(); ok {
+		_spec.SetField(openaivideotask.FieldProviderConfig, field.TypeJSON, value)
+	}
+	if _u.mutation.ProviderConfigCleared() {
+		_spec.ClearField(openaivideotask.FieldProviderConfig, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.TaskID(); ok {
 		_spec.SetField(openaivideotask.FieldTaskID, field.TypeString, value)

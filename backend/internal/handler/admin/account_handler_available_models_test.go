@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package admin
 
 import (
@@ -217,10 +219,10 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefau
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.Data)
-	require.NotEqual(t, "gpt-5", resp.Data[0].ID)
+	require.Equal(t, "gpt-6-astra", resp.Data[0].ID)
 }
 
-func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyListsGPT6AstraFirst(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -249,7 +251,54 @@ func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.Data)
-	require.Equal(t, "gpt-5.6-sol", resp.Data[0].ID)
+	require.Equal(t, "gpt-6-astra", resp.Data[0].ID)
+}
+
+func TestAccountHandlerGetAvailableModels_OpenAIMappingUsesDefaultOrderThenCustomIDs(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       47,
+			Name:     "openai-mapped",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"custom-z":      "upstream-z",
+					"gpt-5.6-terra": "gpt-5.6-terra",
+					"gpt-6-astra":   "gpt-6-astra",
+					"custom-a":      "upstream-a",
+					"gpt-5.6-sol":   "gpt-5.6-sol",
+				},
+			},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
+	require.Equal(t, []string{
+		"gpt-6-astra",
+		"gpt-5.6-sol",
+		"gpt-5.6-terra",
+		"custom-a",
+		"custom-z",
+	}, ids)
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(t *testing.T) {
@@ -525,4 +574,37 @@ func TestAccountHandlerSyncUpstreamModels_MetadataEnrichmentFailureReturnsWarnin
 	require.Equal(t, []string{"x-preview-f-free"}, resp.Data.Models)
 	require.Len(t, resp.Data.Warnings, 1)
 	require.Equal(t, "upstream_model_metadata_incomplete", resp.Data.Warnings[0].Code)
+}
+
+func TestAccountHandlerGetAvailableModels_TypeSafeOnlyReturnsJev(t *testing.T) {
+	for _, credentials := range []map[string]any{
+		{"api_key": "ts-secret"},
+		{"api_key": "ts-secret", "model_mapping": map[string]any{"jev-latest": "jev-latest"}},
+	} {
+		svc := &availableModelsAdminService{
+			stubAdminService: newStubAdminService(),
+			account: service.Account{
+				ID:          46,
+				Name:        "typesafe",
+				Platform:    service.PlatformTypeSafe,
+				Type:        service.AccountTypeAPIKey,
+				Status:      service.StatusActive,
+				Credentials: credentials,
+			},
+		}
+		router := setupAvailableModelsRouter(svc)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/46/models", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var resp struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Len(t, resp.Data, 1)
+		require.Equal(t, "jev-latest", resp.Data[0].ID)
+	}
 }

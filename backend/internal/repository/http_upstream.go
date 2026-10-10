@@ -2,12 +2,10 @@ package repository
 
 import (
 	"bufio"
-	"bytes"
 	"compress/flate"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,11 +20,11 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
-	"golang.org/x/mod/semver"
 	"golang.org/x/net/http2"
 
 	"github.com/LuckyKuang/sub2api-plus/internal/config"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/brandidentity"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/proxyurl"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/proxyutil"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/servertiming"
@@ -77,26 +74,25 @@ const (
 	defaultOpenAIHTTP2FallbackErrorThreshold = 2
 	defaultOpenAIHTTP2FallbackWindow         = 60 * time.Second
 	defaultOpenAIHTTP2FallbackTTL            = 10 * time.Minute
-	// OpenAI HTTP/2 连接健康探测：Codex 上游改走 HTTP/2 后，池化连接被代理/NAT
+	// OpenAI 保留原有的探测与应答期限，避免中转站的延迟 PING 应答被长流策略提前判死。
+	openAIHTTP2ReadIdleTimeout = 15 * time.Second
+	openAIHTTP2PingTimeout     = 15 * time.Second
+	// 长流 HTTP/2 连接健康探测：池化连接被代理/NAT
 	// 静默掐断会成为“死连接”（两端都以为存活），请求落上去会挂到 TCP 重传超时
 	// （分钟级）。Go 的 http2.Transport 默认 ReadIdleTimeout=0（不发健康 PING），
 	// 无法检测。启用主动 PING 探测：连接空闲 ReadIdleTimeout 后发 PING，PingTimeout
 	// 内无响应即判定死连接并关闭，从源头避免请求挂在死连接上。
-	openAIHTTP2ReadIdleTimeout = 15 * time.Second
-	openAIHTTP2PingTimeout     = 15 * time.Second
+	longStreamHTTP2ReadIdleTimeout = 10 * time.Second
+	longStreamHTTP2PingTimeout     = 5 * time.Second
 
-	// The Grok CLI proxy rejects requests that do not identify a supported
-	// client version. Host/env/version pins live in package xai so service,
-	// billing, and transport layers advertise the same identity.
-	grokCLIProxyHost       = xai.CLIProxyHost
-	grokOfficialAPIHost    = "api.x.ai"
-	grokCLIStableVersion   = xai.CLIClientVersion // preferred pin (not the minimum floor)
-	grokCLIVersionOverride = xai.CLIVersionEnv
-	grokFallbackBodyLimit  = 64 << 10
+	// Hosts select only the Grok authentication hint.
+	// Client declarations are resolved by the account's selected identity preset.
+	grokCLIProxyHost = xai.CLIProxyHost
 )
 
 const (
 	upstreamProtocolModeDefault          = "default"
+	upstreamProtocolModeLongStreamH2     = "long_stream_h2"
 	upstreamProtocolModeOpenAIH1         = "openai_h1"
 	upstreamProtocolModeOpenAIH2         = "openai_h2"
 	upstreamProtocolModeOpenAIH1Fallback = "openai_h1_fallback"
@@ -129,7 +125,7 @@ type upstreamClientEntry struct {
 	client       *http.Client // HTTP 客户端实例
 	proxyKey     string       // 代理标识（用于检测代理变更）
 	poolKey      string       // 连接池配置标识（用于检测配置变更）
-	protocolMode string       // 协议模式（default/openai_h1/openai_h2/openai_h1_fallback）
+	protocolMode string       // 协议模式（default/long_stream_h2/openai_h1/openai_h2/openai_h1_fallback）
 	lastUsed     int64        // 最后使用时间戳（纳秒），用于 LRU 淘汰
 	inFlight     int64        // 当前进行中的请求数，>0 时不可淘汰
 }
@@ -198,8 +194,11 @@ func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
 //   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
 //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
 func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
-	applyGrokCLIProxyHeaders(req)
-	brandidentity.FilterOutboundRequest(req)
+	applyGrokCLIProxyAuthentication(req)
+	outboundidentity.ApplyContext(req)
+	if err := brandidentity.FilterOutboundRequest(req); err != nil {
+		return nil, err
+	}
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
 	}
@@ -215,9 +214,8 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	}
 
 	// 执行请求
-	client := httpClientForUpstreamRequest(entry.client, req)
-	client = httpClientWithGrokAccessDeniedFallback(client)
-	resp, err := servertiming.Do(client, req)
+	client := s.httpClientForUpstreamRequest(entry.client, req)
+	resp, err := doUpstreamRequest(client, req)
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
 		// 请求失败，立即减少计数
@@ -226,9 +224,6 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 		return nil, err
 	}
 	s.recordOpenAIHTTP2Success(profile, entry.protocolMode, entry.proxyKey)
-
-	// 如果上游返回了压缩内容，解压后再交给业务层
-	decompressResponseBody(resp)
 
 	// 包装响应体，在关闭时自动减少计数并更新时间戳
 	// 这确保了流式响应（如 SSE）在完全读取前不会被淘汰
@@ -253,8 +248,11 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "http") {
 		return s.Do(req, proxyURL, accountID, accountConcurrency)
 	}
-	applyGrokCLIProxyHeaders(req)
-	brandidentity.FilterOutboundRequest(req)
+	applyGrokCLIProxyAuthentication(req)
+	outboundidentity.ApplyContext(req)
+	if err := brandidentity.FilterOutboundRequest(req); err != nil {
+		return nil, err
+	}
 	upstreamProfile := service.HTTPUpstreamProfileDefault
 	if req != nil {
 		upstreamProfile = service.HTTPUpstreamProfileFromContext(req.Context())
@@ -280,17 +278,14 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
-	client := httpClientForUpstreamRequest(entry.client, req)
-	client = httpClientWithGrokAccessDeniedFallback(client)
-	resp, err := servertiming.Do(client, req)
+	client := s.httpClientForUpstreamRequest(entry.client, req)
+	resp, err := doUpstreamRequest(client, req)
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
 		slog.Debug("tls_fingerprint_request_failed", "account_id", accountID, "error", err)
 		return nil, err
 	}
-
-	decompressResponseBody(resp)
 
 	resp.Body = wrapTrackedBody(resp.Body, func() {
 		atomic.AddInt64(&entry.inFlight, -1)
@@ -300,188 +295,142 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	return resp, nil
 }
 
-func httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.Client {
-	if client == nil || req == nil || !service.HTTPUpstreamRedirectsDisabled(req.Context()) {
-		return client
-	}
-	clone := *client
-	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	return &clone
-}
-
-// grokAccessDeniedFallbackTransport preserves the subscription CLI proxy as
-// the primary OAuth route, but retries a replayable request against api.x.ai
-// when the proxy returns its compatibility-specific 403 "Access denied".
-// Trial subscriptions can hit this boundary while the same OAuth credential
-// remains valid on the official API. Other entitlement failures stay on the
-// original response so account scheduling semantics do not change.
-type grokAccessDeniedFallbackTransport struct {
-	base http.RoundTripper
-}
-
-func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
-	if client == nil {
-		return nil
-	}
-	clone := *client
-	base := clone.Transport
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	clone.Transport = &grokAccessDeniedFallbackTransport{base: base}
-	return &clone
-}
-
-func (t *grokAccessDeniedFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
-	if err != nil || !isGrokCLIAccessDeniedFallbackCandidate(req, resp) {
+// doUpstreamRequest owns cancellation for one attempt, without cancelling the
+// caller's context (which may be detached for billing or reused for retries).
+func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(req.Context())
+	resp, err := servertiming.Do(brandidentity.WrapClient(client), req.WithContext(ctx))
+	if err != nil {
+		cancel()
 		return resp, err
 	}
+	decompressResponseBody(resp)
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
 
-	body, ok := bufferSmallResponseBody(resp, grokFallbackBodyLimit)
-	if !ok || !isGrokCLICompatibilityAccessDenied(body) {
-		return resp, nil
-	}
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+	err    error
+	readMu sync.Mutex
+	closed bool
+}
 
-	fallbackReq, err := newGrokOfficialAPIFallbackRequest(req)
-	if err != nil {
-		return resp, nil
+func (b *cancelOnCloseBody) Read(p []byte) (int, error) {
+	b.readMu.Lock()
+	defer b.readMu.Unlock()
+	if b.closed {
+		return 0, http.ErrBodyReadAfterClose
 	}
-	fallbackResp, fallbackErr := t.base.RoundTrip(fallbackReq)
-	if fallbackErr != nil {
-		slog.Debug("grok_cli_access_denied_api_fallback_failed", "path", req.URL.EscapedPath(), "error", fallbackErr)
-		return resp, nil
+	return b.ReadCloser.Read(p)
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	b.once.Do(func() {
+		// Cancel before closing, including before closing a decompressor. In Go
+		// 1.27 an early HTTP/1 close concurrent with Read can otherwise leave an
+		// EOF waiter on a reused connection and stall subsequent responses.
+		// Fully consumed responses have already released their transport request,
+		// so cancelling here preserves normal keep-alive reuse.
+		b.cancel()
+		// Wait for an active read to observe cancellation before touching the
+		// body or decompressor. Do not hold readMu while cancelling the request.
+		b.readMu.Lock()
+		defer b.readMu.Unlock()
+		b.closed = true
+		b.err = b.ReadCloser.Close()
+	})
+	return b.err
+}
+
+// httpClientForUpstreamRequest 按请求上下文的标记派生客户端：禁用重定向，或对重定向的每一跳做主机校验。
+// 派生的克隆与缓存客户端共享 Transport；未打标记时原样返回。
+func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.Client {
+	if client == nil || req == nil {
+		return client
 	}
-	if fallbackResp.StatusCode < http.StatusOK || fallbackResp.StatusCode >= http.StatusMultipleChoices {
-		if fallbackResp.Body != nil {
-			_ = fallbackResp.Body.Close()
+	ctx := req.Context()
+	if service.HTTPUpstreamRedirectsDisabled(ctx) {
+		clone := *client
+		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		}
-		return resp, nil
+		return &clone
 	}
-
-	if resp.Body != nil {
-		_ = resp.Body.Close()
+	publicHostsOnly := service.HTTPUpstreamPublicHostsOnly(ctx) && client.CheckRedirect == nil
+	// A redirect leaves the origin that advertised the negotiated request
+	// encoding. Cross-origin hops rebuild a plain body from the final JSON and
+	// drop Content-Encoding; same-origin hops replay the encoded bytes. An
+	// unrebuildable compressed body fails the request instead of sending a
+	// wrong encoding. The same-owner identity snapshot travels in the inherited
+	// request context.
+	compressionRebuild := service.GrokRequestCompressionOwned(req)
+	if !publicHostsOnly && !compressionRebuild {
+		return client
 	}
-	slog.Warn("grok_cli_access_denied_api_fallback_succeeded", "method", req.Method, "path", req.URL.EscapedPath())
-	return fallbackResp, nil
-}
-
-func isGrokCLICompatibilityAccessDenied(body []byte) bool {
-	lower := bytes.ToLower(body)
-	if bytes.Contains(lower, []byte("access denied")) {
-		return true
+	previous := client.CheckRedirect
+	if publicHostsOnly {
+		previous = s.redirectChecker
 	}
-	var payload struct {
-		Code  string `json:"code"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil || !strings.EqualFold(strings.TrimSpace(payload.Code), "permission_denied") {
-		return false
-	}
-	const chatEndpointDeniedPrefix = "access to the chat endpoint is denied. please ensure you're using the correct credentials. if you believe this is a mistake, please"
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(payload.Error)), chatEndpointDeniedPrefix)
-}
-
-func isGrokCLIAccessDeniedFallbackCandidate(req *http.Request, resp *http.Response) bool {
-	return req != nil && req.URL != nil && req.GetBody != nil && resp != nil &&
-		resp.StatusCode == http.StatusForbidden &&
-		strings.EqualFold(strings.TrimSpace(req.URL.Hostname()), grokCLIProxyHost) &&
-		strings.EqualFold(strings.TrimSpace(req.Header.Get("X-XAI-Token-Auth")), "xai-grok-cli") &&
-		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Header.Get("Authorization"))), "bearer ")
-}
-
-func newGrokOfficialAPIFallbackRequest(req *http.Request) (*http.Request, error) {
-	body, err := req.GetBody()
-	if err != nil {
-		return nil, err
-	}
-	fallbackReq := req.Clone(req.Context())
-	fallbackReq.Body = body
-	fallbackReq.URL = cloneURL(req.URL)
-	fallbackReq.URL.Scheme = "https"
-	fallbackReq.URL.Host = grokOfficialAPIHost
-	fallbackReq.Host = ""
-	fallbackReq.RequestURI = ""
-	fallbackReq.Header = req.Header.Clone()
-	for _, header := range []string{
-		"X-XAI-Token-Auth",
-		"X-Grok-Client-Version",
-		"X-Grok-Client-Surface",
-		"X-UserID",
-		"X-Email",
-		"User-Agent",
-	} {
-		fallbackReq.Header.Del(header)
-	}
-	return fallbackReq, nil
-}
-
-func cloneURL(value *url.URL) *url.URL {
-	if value == nil {
+	clone := *client
+	clone.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if previous != nil {
+			if err := previous(next, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if compressionRebuild && len(via) > 0 && service.GrokRequestOriginChanged(via[len(via)-1], next) {
+			if err := service.RebuildGrokPlainRequest(next); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	clone := *value
 	return &clone
 }
 
-func bufferSmallResponseBody(resp *http.Response, limit int64) ([]byte, bool) {
-	if resp == nil || resp.Body == nil || limit <= 0 {
-		return nil, false
-	}
-	original := resp.Body
-	body, err := io.ReadAll(io.LimitReader(original, limit+1))
-	if err != nil || int64(len(body)) > limit {
-		resp.Body = &prefixedReadCloser{
-			Reader: io.MultiReader(bytes.NewReader(body), original),
-			Closer: original,
-		}
-		return nil, false
-	}
-	_ = original.Close()
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
-	return body, true
-}
-
-type prefixedReadCloser struct {
-	io.Reader
-	io.Closer
-}
-
-// applyGrokCLIProxyHeaders applies the official Grok Build client identity at
-// the final shared transport boundary. Keying this behavior to the exact CLI
-// proxy host keeps direct api.x.ai traffic unchanged and automatically covers
-// Responses, Chat Completions, media, quota probes, and account tests.
-//
-// Operator overrides must be >= CLIClientVersion (the preferred pin). Package
-// xai.IsSupportedCLIVersion uses a lower floor (CLIStableVersion) for general
-// validation; transport is stricter so we never silently advertise an older pin
-// than the binary default.
-func applyGrokCLIProxyHeaders(req *http.Request) {
-	if req == nil || req.URL == nil || !strings.EqualFold(strings.TrimSpace(req.URL.Hostname()), grokCLIProxyHost) {
+// The destination owns its authentication hints, never the client's identity.
+// Reconcile on every RoundTrip so redirects cannot carry CLI-only declarations
+// to another host. Identity resolution belongs to the account/preset layer.
+func applyGrokCLIProxyAuthentication(req *http.Request) {
+	if req == nil || req.URL == nil {
 		return
 	}
 	if req.Header == nil {
 		req.Header = make(http.Header)
 	}
-	version := strings.TrimSpace(os.Getenv(grokCLIVersionOverride))
-	if !isSupportedGrokCLIVersion(version) {
-		version = grokCLIStableVersion
+	if !strings.EqualFold(strings.TrimSpace(req.URL.Hostname()), grokCLIProxyHost) {
+		req.Header.Del("X-XAI-Token-Auth")
+		req.Header.Del("x-authenticateresponse")
+		return
 	}
 	req.Header.Set("X-XAI-Token-Auth", xai.CLITokenAuth)
-	req.Header.Set("x-grok-client-version", version)
-	req.Header.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
-	req.Header.Set("User-Agent", xai.CLIUserAgent(version))
+	if isGrokCLIProxyResponseAuthenticatedRequest(req) {
+		req.Header.Set("x-authenticateresponse", xai.CLIAuthenticateResponse)
+	} else {
+		req.Header.Del("x-authenticateresponse")
+	}
 }
 
-func isSupportedGrokCLIVersion(version string) bool {
-	canonical := "v" + version
-	minimum := "v" + xai.CLIClientVersion
-	return semver.IsValid(canonical) &&
-		semver.Canonical(canonical) == canonical &&
-		semver.Compare(canonical, minimum) >= 0
+func isGrokCLIProxyResponseAuthenticatedRequest(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	path := strings.ToLower(strings.TrimRight(req.URL.EscapedPath(), "/"))
+	for _, suffix := range []string{
+		"/responses", "/chat/completions", "/messages",
+		"/images/generations", "/images/edits",
+		"/videos/generations", "/videos/edits", "/videos/extensions",
+	} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // acquireClientWithTLS 获取或创建带 TLS 指纹的客户端
@@ -590,8 +539,11 @@ func (s *httpUpstreamService) shouldValidateResolvedIP() bool {
 	return !s.cfg.Security.URLAllowlist.AllowPrivateHosts
 }
 
+// validateRequestHost 校验请求主机的解析结果不落在回环、私网、链路本地或未指定地址。
+// 是否全局启用由 security.url_allowlist 决定；带 WithHTTPUpstreamPublicHostsOnly 标记的请求无论配置如何都校验。
 func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
-	if !s.shouldValidateResolvedIP() {
+	publicHostsOnly := req != nil && service.HTTPUpstreamPublicHostsOnly(req.Context())
+	if !s.shouldValidateResolvedIP() && !publicHostsOnly {
 		return nil
 	}
 	if req == nil || req.URL == nil {
@@ -995,6 +947,9 @@ func (s *httpUpstreamService) resolveOpenAIHTTP2Settings() openAIHTTP2Settings {
 }
 
 func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamProfile, proxyKey string, parsedProxy *url.URL) string {
+	if profile == service.HTTPUpstreamProfileLongStream {
+		return upstreamProtocolModeLongStreamH2
+	}
 	if profile == service.HTTPUpstreamProfileGrok {
 		return upstreamProtocolModeGrok
 	}
@@ -1310,6 +1265,10 @@ func newUpstreamDialer() *net.Dialer {
 //   - IdleConnTimeout: 空闲连接超时（超时后关闭）
 //   - ResponseHeaderTimeout: 等待响应头超时（不影响流式传输）
 func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMode string) (*http.Transport, error) {
+	if protocolMode == upstreamProtocolModeGrok {
+		settings.maxIdleConnsPerHost = 2
+		settings.idleConnTimeout = 90 * time.Second
+	}
 	transport := &http.Transport{
 		DialContext:           newUpstreamDialer().DialContext,
 		TLSHandshakeTimeout:   defaultUpstreamTLSHandshakeTimeout,
@@ -1320,11 +1279,11 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMo
 		ResponseHeaderTimeout: settings.responseHeaderTimeout,
 	}
 	switch protocolMode {
-	case upstreamProtocolModeOpenAIH2:
+	case upstreamProtocolModeLongStreamH2, upstreamProtocolModeOpenAIH2, upstreamProtocolModeGrok:
 		transport.ForceAttemptHTTP2 = true
 		// 显式配置 http2 并启用 PING 健康探测，剔除代理/NAT 静默掐断的死连接，
 		// 避免请求挂在死连接上直到 TCP 重传超时（分钟级）。
-		if _, err := enableOpenAIHTTP2KeepAlive(transport); err != nil {
+		if _, err := enableHTTP2KeepAlive(transport, protocolMode); err != nil {
 			return nil, err
 		}
 	case upstreamProtocolModeOpenAIH1:
@@ -1341,18 +1300,26 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMo
 	return transport, nil
 }
 
-// enableOpenAIHTTP2KeepAlive 在 http.Transport 上显式配置 HTTP/2 并启用连接健康探测。
+// enableHTTP2KeepAlive 在 http.Transport 上显式配置 HTTP/2 并启用连接健康探测。
 // Go 默认惰性配置 http2 且 ReadIdleTimeout=0（不发健康 PING），无法检测被代理/NAT
 // 静默掐断的死连接。此处主动设置 ReadIdleTimeout/PingTimeout，让死连接被提前 PING
 // 出并关闭，请求得以重建连接而非挂到 TCP 重传超时。返回底层 *http2.Transport 便于测试。
-func enableOpenAIHTTP2KeepAlive(transport *http.Transport) (*http2.Transport, error) {
+func enableHTTP2KeepAlive(transport *http.Transport, protocolMode string) (*http2.Transport, error) {
 	h2, err := http2.ConfigureTransports(transport)
 	if err != nil {
 		return nil, err
 	}
 	if h2 != nil {
-		h2.ReadIdleTimeout = openAIHTTP2ReadIdleTimeout
-		h2.PingTimeout = openAIHTTP2PingTimeout
+		h2.ReadIdleTimeout = longStreamHTTP2ReadIdleTimeout
+		h2.PingTimeout = longStreamHTTP2PingTimeout
+		if protocolMode == upstreamProtocolModeGrok {
+			h2.ReadIdleTimeout = 15 * time.Second
+			h2.PingTimeout = 5 * time.Second
+		}
+		if protocolMode == upstreamProtocolModeOpenAIH2 {
+			h2.ReadIdleTimeout = openAIHTTP2ReadIdleTimeout
+			h2.PingTimeout = openAIHTTP2PingTimeout
+		}
 	}
 	return h2, nil
 }

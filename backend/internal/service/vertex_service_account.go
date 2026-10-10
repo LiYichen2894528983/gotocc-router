@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/brandidentity"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
 	"io"
 	"log/slog"
 	"net/http"
@@ -148,6 +150,7 @@ func vertexServiceAccountCacheKey(account *Account, key *vertexServiceAccountKey
 // getVertexServiceAccountAccessToken obtains an access token for a Vertex service account,
 // using the shared cache and distributed lock to avoid redundant exchanges.
 func getVertexServiceAccountAccessToken(ctx context.Context, cache GeminiTokenCache, account *Account) (string, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	key, err := parseVertexServiceAccountKey(account)
 	if err != nil {
 		return "", err
@@ -196,7 +199,7 @@ func vertexServiceAccountProxyURL(account *Account) string {
 func newVertexServiceAccountHTTPClient(proxyURL string) (*http.Client, error) {
 	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" {
-		return servertiming.InstrumentClient(&http.Client{Timeout: 15 * time.Second}), nil
+		return servertiming.InstrumentClient(brandidentity.WrapClient(&http.Client{Timeout: 15 * time.Second})), nil
 	}
 
 	_, parsedProxy, err := proxyurl.Parse(proxyURL)
@@ -212,7 +215,7 @@ func newVertexServiceAccountHTTPClient(proxyURL string) (*http.Client, error) {
 	if err := proxyutil.ConfigureTransportProxy(transport, parsedProxy); err != nil {
 		return nil, err
 	}
-	return servertiming.InstrumentClient(&http.Client{Timeout: 15 * time.Second, Transport: transport}), nil
+	return servertiming.InstrumentClient(brandidentity.WrapClient(&http.Client{Timeout: 15 * time.Second, Transport: transport})), nil
 }
 
 func exchangeVertexServiceAccountToken(ctx context.Context, key *vertexServiceAccountKey, proxyURL string) (string, time.Duration, error) {
@@ -251,6 +254,7 @@ func exchangeVertexServiceAccountToken(ctx context.Context, key *vertexServiceAc
 	if err != nil {
 		return "", 0, fmt.Errorf("configure service account token proxy: %w", err)
 	}
+	outboundidentity.ApplyDefault(req, "gemini")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("service account token request failed: %w", err)

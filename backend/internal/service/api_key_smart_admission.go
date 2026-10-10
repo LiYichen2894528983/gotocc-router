@@ -46,7 +46,7 @@ func (s *AutoGroupResolver) Admit(ctx context.Context, bound *APIKey) (*AutoRout
 		return nil, ErrAutoRouteNoAccess
 	}
 	if route, ok := AutoRouteDecisionFromContext(ctx); ok {
-		if (route.Endpoint != "" && !autoRouteEndpointSupportsGroup(currentGroup, route.Platform, route.Endpoint)) || (route.ImageGeneration && !currentGroup.AllowImageGeneration) {
+		if !currentGroup.ModelAllowlist.Allows(route.PublicModel) || (route.Endpoint != "" && !autoRouteEndpointSupportsGroup(currentGroup, route.Platform, route.Endpoint)) || (route.ImageGeneration && !currentGroup.AllowImageGeneration) {
 			return nil, ErrAutoRouteNoAccess
 		}
 	}
@@ -57,12 +57,22 @@ func (s *AutoGroupResolver) Admit(ctx context.Context, bound *APIKey) (*AutoRout
 	if payer == nil || payer.ID != bound.User.ID || !payer.IsActive() {
 		return nil, ErrAutoRouteNoAccess
 	}
-	if !currentGroup.IsSubscriptionType() && !payer.CanBindGroup(groupID, currentGroup.IsExclusive) {
+	if bound.User.ResellerCustomer == nil && !currentGroup.IsSubscriptionType() && !payer.CanBindGroup(groupID, currentGroup.IsExclusive) {
 		return nil, ErrAutoRouteNoAccess
 	}
 	copyUser, copyGroup := *payer, *currentGroup
 	copyUser.UserGroupRPMOverride = nil
 	key.User, key.Group, key.GroupID = &copyUser, &copyGroup, &groupID
+	if err := s.keys.attachResellerCustomer(ctx, key); err != nil {
+		return nil, err
+	}
+	if err := s.keys.ValidateTeamGroupEntitlement(ctx, key); err != nil {
+		return nil, err
+	}
+	payer = key.User
+	if !payer.CanBindGroup(groupID, currentGroup.IsExclusive) && payer.ResellerCustomer != nil {
+		return nil, ErrAutoRouteNoAccess
+	}
 	if s.keys.userGroupRateRepo != nil {
 		override, err := s.keys.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, payer.ID, groupID)
 		if err != nil {
@@ -70,11 +80,15 @@ func (s *AutoGroupResolver) Admit(ctx context.Context, bound *APIKey) (*AutoRout
 		}
 		if override != nil {
 			value := *override
-			copyUser.UserGroupRPMOverride = &value
+			key.User.UserGroupRPMOverride = &value
 		}
 	}
 	admission := &AutoRouteAdmission{Key: key}
-	if currentGroup.IsSubscriptionType() {
+	if payer.ResellerCustomer != nil {
+		if err := checkResellerCustomerFunds(payer.ResellerCustomer); err != nil {
+			return nil, err
+		}
+	} else if key.TeamID == nil && currentGroup.IsSubscriptionType() {
 		if s.subscriptions == nil || s.keys.userSubRepo == nil {
 			return nil, ErrAutoRouteUnavailable
 		}

@@ -12,6 +12,8 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/LuckyKuang/sub2api-plus/ent/openaivideotask"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/reseller"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/videoprotocol"
 )
 
 // OpenAIVideoTaskCreate is the builder for creating a OpenAIVideoTask entity.
@@ -20,6 +22,32 @@ type OpenAIVideoTaskCreate struct {
 	mutation *OpenAIVideoTaskMutation
 	hooks    []Hook
 	conflict []sql.ConflictOption
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (_c *OpenAIVideoTaskCreate) SetResellerSnapshot(v *reseller.Snapshot) *OpenAIVideoTaskCreate {
+	_c.mutation.SetResellerSnapshot(v)
+	return _c
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (_c *OpenAIVideoTaskCreate) SetTeamWallet(v bool) *OpenAIVideoTaskCreate {
+	_c.mutation.SetTeamWallet(v)
+	return _c
+}
+
+// SetNillableTeamWallet sets the "team_wallet" field if the given value is not nil.
+func (_c *OpenAIVideoTaskCreate) SetNillableTeamWallet(v *bool) *OpenAIVideoTaskCreate {
+	if v != nil {
+		_c.SetTeamWallet(*v)
+	}
+	return _c
+}
+
+// SetProviderConfig sets the "provider_config" field.
+func (_c *OpenAIVideoTaskCreate) SetProviderConfig(v *videoprotocol.Config) *OpenAIVideoTaskCreate {
+	_c.mutation.SetProviderConfig(v)
+	return _c
 }
 
 // SetLocalRequestID sets the "local_request_id" field.
@@ -553,6 +581,10 @@ func (_c *OpenAIVideoTaskCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *OpenAIVideoTaskCreate) defaults() {
+	if _, ok := _c.mutation.TeamWallet(); !ok {
+		v := openaivideotask.DefaultTeamWallet
+		_c.mutation.SetTeamWallet(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := openaivideotask.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -601,6 +633,14 @@ func (_c *OpenAIVideoTaskCreate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_c *OpenAIVideoTaskCreate) check() error {
+	if _, ok := _c.mutation.TeamWallet(); !ok {
+		return &ValidationError{Name: "team_wallet", err: errors.New(`ent: missing required field "OpenAIVideoTask.team_wallet"`)}
+	}
+	if v, ok := _c.mutation.ProviderConfig(); ok {
+		if err := v.Validate(); err != nil {
+			return &ValidationError{Name: "provider_config", err: fmt.Errorf(`ent: validator failed for field "OpenAIVideoTask.provider_config": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.LocalRequestID(); !ok {
 		return &ValidationError{Name: "local_request_id", err: errors.New(`ent: missing required field "OpenAIVideoTask.local_request_id"`)}
 	}
@@ -786,6 +826,18 @@ func (_c *OpenAIVideoTaskCreate) createSpec() (*OpenAIVideoTask, *sqlgraph.Creat
 		_spec = sqlgraph.NewCreateSpec(openaivideotask.Table, sqlgraph.NewFieldSpec(openaivideotask.FieldID, field.TypeInt64))
 	)
 	_spec.OnConflict = _c.conflict
+	if value, ok := _c.mutation.ResellerSnapshot(); ok {
+		_spec.SetField(openaivideotask.FieldResellerSnapshot, field.TypeJSON, value)
+		_node.ResellerSnapshot = value
+	}
+	if value, ok := _c.mutation.TeamWallet(); ok {
+		_spec.SetField(openaivideotask.FieldTeamWallet, field.TypeBool, value)
+		_node.TeamWallet = value
+	}
+	if value, ok := _c.mutation.ProviderConfig(); ok {
+		_spec.SetField(openaivideotask.FieldProviderConfig, field.TypeJSON, value)
+		_node.ProviderConfig = value
+	}
 	if value, ok := _c.mutation.LocalRequestID(); ok {
 		_spec.SetField(openaivideotask.FieldLocalRequestID, field.TypeString, value)
 		_node.LocalRequestID = value
@@ -969,7 +1021,7 @@ func (_c *OpenAIVideoTaskCreate) createSpec() (*OpenAIVideoTask, *sqlgraph.Creat
 // of the `INSERT` statement. For example:
 //
 //	client.OpenAIVideoTask.Create().
-//		SetLocalRequestID(v).
+//		SetResellerSnapshot(v).
 //		OnConflict(
 //			// Update the row with the new values
 //			// the was proposed for insertion.
@@ -978,7 +1030,7 @@ func (_c *OpenAIVideoTaskCreate) createSpec() (*OpenAIVideoTask, *sqlgraph.Creat
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.OpenAIVideoTaskUpsert) {
-//			SetLocalRequestID(v+v).
+//			SetResellerSnapshot(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *OpenAIVideoTaskCreate) OnConflict(opts ...sql.ConflictOption) *OpenAIVideoTaskUpsertOne {
@@ -1013,6 +1065,54 @@ type (
 		*sql.UpdateSet
 	}
 )
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (u *OpenAIVideoTaskUpsert) SetResellerSnapshot(v *reseller.Snapshot) *OpenAIVideoTaskUpsert {
+	u.Set(openaivideotask.FieldResellerSnapshot, v)
+	return u
+}
+
+// UpdateResellerSnapshot sets the "reseller_snapshot" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsert) UpdateResellerSnapshot() *OpenAIVideoTaskUpsert {
+	u.SetExcluded(openaivideotask.FieldResellerSnapshot)
+	return u
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (u *OpenAIVideoTaskUpsert) ClearResellerSnapshot() *OpenAIVideoTaskUpsert {
+	u.SetNull(openaivideotask.FieldResellerSnapshot)
+	return u
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (u *OpenAIVideoTaskUpsert) SetTeamWallet(v bool) *OpenAIVideoTaskUpsert {
+	u.Set(openaivideotask.FieldTeamWallet, v)
+	return u
+}
+
+// UpdateTeamWallet sets the "team_wallet" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsert) UpdateTeamWallet() *OpenAIVideoTaskUpsert {
+	u.SetExcluded(openaivideotask.FieldTeamWallet)
+	return u
+}
+
+// SetProviderConfig sets the "provider_config" field.
+func (u *OpenAIVideoTaskUpsert) SetProviderConfig(v *videoprotocol.Config) *OpenAIVideoTaskUpsert {
+	u.Set(openaivideotask.FieldProviderConfig, v)
+	return u
+}
+
+// UpdateProviderConfig sets the "provider_config" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsert) UpdateProviderConfig() *OpenAIVideoTaskUpsert {
+	u.SetExcluded(openaivideotask.FieldProviderConfig)
+	return u
+}
+
+// ClearProviderConfig clears the value of the "provider_config" field.
+func (u *OpenAIVideoTaskUpsert) ClearProviderConfig() *OpenAIVideoTaskUpsert {
+	u.SetNull(openaivideotask.FieldProviderConfig)
+	return u
+}
 
 // SetTaskID sets the "task_id" field.
 func (u *OpenAIVideoTaskUpsert) SetTaskID(v string) *OpenAIVideoTaskUpsert {
@@ -1768,6 +1868,62 @@ func (u *OpenAIVideoTaskUpsertOne) Update(set func(*OpenAIVideoTaskUpsert)) *Ope
 		set(&OpenAIVideoTaskUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (u *OpenAIVideoTaskUpsertOne) SetResellerSnapshot(v *reseller.Snapshot) *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.SetResellerSnapshot(v)
+	})
+}
+
+// UpdateResellerSnapshot sets the "reseller_snapshot" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsertOne) UpdateResellerSnapshot() *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.UpdateResellerSnapshot()
+	})
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (u *OpenAIVideoTaskUpsertOne) ClearResellerSnapshot() *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.ClearResellerSnapshot()
+	})
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (u *OpenAIVideoTaskUpsertOne) SetTeamWallet(v bool) *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.SetTeamWallet(v)
+	})
+}
+
+// UpdateTeamWallet sets the "team_wallet" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsertOne) UpdateTeamWallet() *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.UpdateTeamWallet()
+	})
+}
+
+// SetProviderConfig sets the "provider_config" field.
+func (u *OpenAIVideoTaskUpsertOne) SetProviderConfig(v *videoprotocol.Config) *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.SetProviderConfig(v)
+	})
+}
+
+// UpdateProviderConfig sets the "provider_config" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsertOne) UpdateProviderConfig() *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.UpdateProviderConfig()
+	})
+}
+
+// ClearProviderConfig clears the value of the "provider_config" field.
+func (u *OpenAIVideoTaskUpsertOne) ClearProviderConfig() *OpenAIVideoTaskUpsertOne {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.ClearProviderConfig()
+	})
 }
 
 // SetTaskID sets the "task_id" field.
@@ -2731,7 +2887,7 @@ func (_c *OpenAIVideoTaskCreateBulk) ExecX(ctx context.Context) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.OpenAIVideoTaskUpsert) {
-//			SetLocalRequestID(v+v).
+//			SetResellerSnapshot(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *OpenAIVideoTaskCreateBulk) OnConflict(opts ...sql.ConflictOption) *OpenAIVideoTaskUpsertBulk {
@@ -2808,6 +2964,62 @@ func (u *OpenAIVideoTaskUpsertBulk) Update(set func(*OpenAIVideoTaskUpsert)) *Op
 		set(&OpenAIVideoTaskUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (u *OpenAIVideoTaskUpsertBulk) SetResellerSnapshot(v *reseller.Snapshot) *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.SetResellerSnapshot(v)
+	})
+}
+
+// UpdateResellerSnapshot sets the "reseller_snapshot" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsertBulk) UpdateResellerSnapshot() *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.UpdateResellerSnapshot()
+	})
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (u *OpenAIVideoTaskUpsertBulk) ClearResellerSnapshot() *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.ClearResellerSnapshot()
+	})
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (u *OpenAIVideoTaskUpsertBulk) SetTeamWallet(v bool) *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.SetTeamWallet(v)
+	})
+}
+
+// UpdateTeamWallet sets the "team_wallet" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsertBulk) UpdateTeamWallet() *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.UpdateTeamWallet()
+	})
+}
+
+// SetProviderConfig sets the "provider_config" field.
+func (u *OpenAIVideoTaskUpsertBulk) SetProviderConfig(v *videoprotocol.Config) *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.SetProviderConfig(v)
+	})
+}
+
+// UpdateProviderConfig sets the "provider_config" field to the value that was provided on create.
+func (u *OpenAIVideoTaskUpsertBulk) UpdateProviderConfig() *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.UpdateProviderConfig()
+	})
+}
+
+// ClearProviderConfig clears the value of the "provider_config" field.
+func (u *OpenAIVideoTaskUpsertBulk) ClearProviderConfig() *OpenAIVideoTaskUpsertBulk {
+	return u.Update(func(s *OpenAIVideoTaskUpsert) {
+		s.ClearProviderConfig()
+	})
 }
 
 // SetTaskID sets the "task_id" field.

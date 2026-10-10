@@ -107,7 +107,7 @@ func (s *SettingService) normalizeClientDisconnectRiskGeneration(ctx context.Con
 		return nil
 	}
 
-	currentEnabled := !isFalseSettingValue(requestedValue)
+	currentEnabled := strings.EqualFold(strings.TrimSpace(requestedValue), "true")
 	currentGeneration := settings.ClientDisconnectConsecutiveBanGeneration
 	if currentGeneration < 1 {
 		currentGeneration = 1
@@ -122,7 +122,7 @@ func (s *SettingService) normalizeClientDisconnectRiskGeneration(ctx context.Con
 		}
 	}
 
-	requestedEnabled := !isFalseSettingValue(requestedValue)
+	requestedEnabled := strings.EqualFold(strings.TrimSpace(requestedValue), "true")
 	if requestedEnabled != currentEnabled {
 		currentGeneration++
 	}
@@ -192,6 +192,21 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, err
 	}
 	settings.OpenAICodexUserAgent = normalizedOpenAICodexUserAgent
+	normalizedOpenAICodexEnvironmentTimezone, err := NormalizeOpenAICodexEnvironmentTimezone(settings.OpenAICodexEnvironmentTimezone)
+	if err != nil {
+		return nil, err
+	}
+	settings.OpenAICodexEnvironmentTimezone = normalizedOpenAICodexEnvironmentTimezone
+	normalizedOpenAICodexEgressCountry, err := NormalizeOpenAICodexEgressCountry(settings.OpenAICodexEgressCountry)
+	if err != nil {
+		return nil, err
+	}
+	settings.OpenAICodexEgressCountry = normalizedOpenAICodexEgressCountry
+	normalizedOpenAICodexResidency, err := NormalizeOpenAICodexResidency(settings.OpenAICodexResidency)
+	if err != nil {
+		return nil, err
+	}
+	settings.OpenAICodexResidency = normalizedOpenAICodexResidency
 	settings.PaymentVisibleMethodAlipaySource = alipaySource
 	settings.PaymentVisibleMethodWxpaySource = wxpaySource
 	settings.WeChatConnectAppID = strings.TrimSpace(settings.WeChatConnectAppID)
@@ -431,6 +446,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyDefaultBalance] = strconv.FormatFloat(settings.DefaultBalance, 'f', 8, 64)
 	settings.AffiliateRebateRate = clampAffiliateRebateRate(settings.AffiliateRebateRate)
 	updates[SettingKeyAffiliateRebateRate] = strconv.FormatFloat(settings.AffiliateRebateRate, 'f', 8, 64)
+	settings.AffiliateRebateRateL2 = clampAffiliateRebateRate(settings.AffiliateRebateRateL2)
+	updates[SettingKeyAffiliateRebateRateL2] = strconv.FormatFloat(settings.AffiliateRebateRateL2, 'f', 8, 64)
+	settings.AffiliateRebateRateL3 = clampAffiliateRebateRate(settings.AffiliateRebateRateL3)
+	updates[SettingKeyAffiliateRebateRateL3] = strconv.FormatFloat(settings.AffiliateRebateRateL3, 'f', 8, 64)
 	if settings.AffiliateRebateFreezeHours < 0 {
 		settings.AffiliateRebateFreezeHours = AffiliateRebateFreezeHoursDefault
 	}
@@ -488,6 +507,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyChannelMonitorHideThroughput] = strconv.FormatBool(settings.ChannelMonitorHideThroughput)
 	updates[SettingKeyChannelMonitorShowQuota] = strconv.FormatBool(settings.ChannelMonitorShowQuota)
+	updates[SettingKeyChannelMonitorHideUserRanking] = strconv.FormatBool(settings.ChannelMonitorHideUserRanking)
 
 	// Grok model mapping policy
 	if v := strings.TrimSpace(settings.GrokDefaultTextModel); v != "" {
@@ -500,6 +520,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
+
+	// Subscription feature switch
+	updates[SettingKeySubscriptionEnabled] = strconv.FormatBool(settings.SubscriptionEnabled)
 
 	// Model plaza feature switches + description
 	updates[SettingKeyModelPlazaEnabled] = strconv.FormatBool(settings.ModelPlazaEnabled)
@@ -524,6 +547,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// cyber 会话屏蔽开关 + TTL
 	updates[SettingKeyCyberSessionBlockEnabled] = strconv.FormatBool(settings.CyberSessionBlockEnabled)
+	if _, err := ParseCyberPolicyUserAllowlist(settings.CyberPolicyUserAllowlist); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyCyberPolicyUserAllowlist] = settings.CyberPolicyUserAllowlist
 	if settings.CyberSessionBlockTTLSeconds > 0 {
 		updates[SettingKeyCyberSessionBlockTTLSeconds] = strconv.Itoa(settings.CyberSessionBlockTTLSeconds)
 	}
@@ -539,11 +566,6 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyBackendModeEnabled] = strconv.FormatBool(settings.BackendModeEnabled)
 
 	// Gateway forwarding behavior
-	mode := normalizeOpenAITTFTMode(settings.OpenAITTFTMode)
-	if strings.TrimSpace(settings.OpenAITTFTMode) != "" && strings.ToLower(strings.TrimSpace(settings.OpenAITTFTMode)) != OpenAITTFTModeSemantic && strings.ToLower(strings.TrimSpace(settings.OpenAITTFTMode)) != OpenAITTFTModeVisible {
-		return nil, fmt.Errorf("%s must be one of: %s/%s", SettingKeyOpenAITTFTMode, OpenAITTFTModeSemantic, OpenAITTFTModeVisible)
-	}
-	updates[SettingKeyOpenAITTFTMode] = mode
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
@@ -558,10 +580,16 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableClientDatelineNormalization] = strconv.FormatBool(settings.EnableClientDatelineNormalization)
 	updates[SettingKeyAntigravityUserAgentVersion] = antigravity.NormalizeUserAgentVersion(settings.AntigravityUserAgentVersion)
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
+	updates[SettingKeyOpenAICodexEnvironmentTimezone] = strings.TrimSpace(settings.OpenAICodexEnvironmentTimezone)
+	updates[SettingKeyOpenAICodexEgressCountry] = strings.TrimSpace(settings.OpenAICodexEgressCountry)
+	updates[SettingKeyOpenAICodexResidency] = settings.OpenAICodexResidency
 	updates[SettingKeyCodexLegacyClientProfileCompatibilityEnabled] = strconv.FormatBool(settings.CodexLegacyClientProfileCompatibilityEnabled)
 	updates[SettingKeyOpenAICodexLocalGroupQuotaEnabled] = strconv.FormatBool(settings.OpenAICodexLocalGroupQuotaEnabled)
 	updates[SettingKeyOpenAICodexClientVersion] = NormalizeCodexClientVersion(settings.OpenAICodexClientVersion)
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
+	updates[SettingKeyClaudeCodeClientVersion] = NormalizeClaudeCodeClientVersion(settings.ClaudeCodeClientVersion)
+	updates[SettingKeyClaudeCodeVersionAutoSyncEnabled] = strconv.FormatBool(settings.ClaudeCodeVersionAutoSyncEnabled)
+	// SettingKeyClaudeCodeClientVersionSynced 由同步任务独占写入。
 	// SettingKeyOpenAICodexClientVersionSynced、CheckedAt、SyncError 由同步任务独占写入，
 	// 此处不得覆盖，否则面板保存会把同步结果和时间清空。
 	// codex_cli_only profile policy
@@ -783,7 +811,6 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-		openAITTFTMode:                   normalizeOpenAITTFTMode(settings.OpenAITTFTMode),
 		fingerprintUnification:           settings.EnableFingerprintUnification,
 		metadataPassthrough:              settings.EnableMetadataPassthrough,
 		cchSigning:                       settings.EnableCCHSigning,
@@ -814,6 +841,21 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		legacyCompatibilityEnabled: settings.CodexLegacyClientProfileCompatibilityEnabled,
 		expiresAt:                  time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
 	})
+	s.openAICodexEnvironmentTimezoneSF.Forget("openai_codex_environment_timezone")
+	s.openAICodexEnvironmentTimezoneCache.Store(&cachedOpenAICodexEnvironmentTimezone{
+		value:     strings.TrimSpace(settings.OpenAICodexEnvironmentTimezone),
+		expiresAt: time.Now().Add(openAICodexEnvironmentTimezoneCacheTTL).UnixNano(),
+	})
+	s.openAICodexEgressCountrySF.Forget("openai_codex_egress_country")
+	s.openAICodexEgressCountryCache.Store(&cachedOpenAICodexEgressCountry{
+		value:     strings.TrimSpace(settings.OpenAICodexEgressCountry),
+		expiresAt: time.Now().Add(openAICodexEgressCountryCacheTTL).UnixNano(),
+	})
+	s.openAICodexResidencySF.Forget("codex_residency")
+	s.openAICodexResidencyCache.Store(&cachedOpenAICodexResidency{
+		value:     settings.OpenAICodexResidency,
+		expiresAt: time.Now().Add(openAICodexResidencyCacheTTL).UnixNano(),
+	})
 	s.openAICodexLocalQuotaSF.Forget("openai_codex_local_group_quota")
 	s.openAICodexLocalQuotaCache.Store(&cachedOpenAICodexLocalGroupQuota{
 		enabled:       settings.OpenAICodexLocalGroupQuotaEnabled,
@@ -823,6 +865,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	// 版本号缓存只做失效，不在此重算：生效值还取决于自动同步写入的 synced 键，
 	// 这里没有它的最新值，重算会把同步结果覆盖成陈旧值。
 	s.InvalidateOpenAICodexClientVersionCache()
+	s.InvalidateClaudeCodeClientVersionCache()
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
 		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,
@@ -876,6 +919,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	// codex_cli_only 加固策略缓存：设置更新后强制下次重载（涉及 4 个键 + JSON 解析，直接置过期）。
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")
 	s.codexRestrictionPolicyCache.Store(&cachedCodexRestrictionPolicy{expiresAt: 0})
+	// Retain the successfully saved allowlist if the next DB refresh fails.
+	s.cyberSessionBlockRuntimeMu.Lock()
+	allowlistedUsers, _ := ParseCyberPolicyUserAllowlist(settings.CyberPolicyUserAllowlist)
+	s.cyberSessionBlockRuntimeCache.Store(&cachedCyberSessionBlockRuntime{allowlistedUsers: allowlistedUsers})
+	s.cyberSessionBlockRuntimeMu.Unlock()
 	if s.onUpdate != nil {
 		s.onUpdate() // Invalidate cache after settings update
 	}

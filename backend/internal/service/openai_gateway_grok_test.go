@@ -627,7 +627,7 @@ func TestForwardGrokResponsesCodexAdditionalToolsUsesMixedCacheIntent(t *testing
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-	c.Request.Header.Set(grokClientToolCacheOptInHeader, "prefer-cache")
+	c.Request.Header.Set("X-Grok-Client-Tool-Cache", "prefer-cache")
 	c.Set("api_key", &APIKey{ID: 4501})
 
 	account := healthyGrokOAuthGatewayTestAccount(4501, "access-token")
@@ -658,20 +658,20 @@ func TestForwardGrokResponsesCodexAdditionalToolsUsesMixedCacheIntent(t *testing
 	require.Equal(t, "resp_codex_lite", result.ResponseID)
 	require.False(t, gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools")`).Exists())
 	tools := gjson.GetBytes(upstream.lastBody, "tools").Array()
-	require.Len(t, tools, 4)
+	require.Len(t, tools, 3, "client functions never become hosted search by name")
 	require.Equal(t, "function", tools[0].Get("type").String())
 	require.Equal(t, "lookup", tools[0].Get("name").String())
-	require.Equal(t, "web_search", tools[1].Get("type").String())
+	require.Equal(t, "function", tools[1].Get("type").String())
+	require.Equal(t, "web_search", tools[1].Get("name").String())
 	require.Equal(t, "function", tools[2].Get("type").String())
 	require.Equal(t, "apply_patch", tools[2].Get("name").String())
-	require.Equal(t, "x_search", tools[3].Get("type").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tool_choice").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="custom")`).Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="namespace")`).Exists())
 	identity := gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String()
 	require.NotEmpty(t, identity)
 	require.Equal(t, identity, upstream.lastReq.Header.Get(grokConversationIDHeader))
-	require.Empty(t, upstream.lastReq.Header.Get(grokClientToolCacheOptInHeader))
+	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Tool-Cache"))
 }
 
 func TestForwardGrokResponsesClaudeDesktopClientToolsUseCacheRoute(t *testing.T) {
@@ -756,13 +756,11 @@ func TestForwardGrokResponsesClaudeDesktopClientToolsUseCacheRoute(t *testing.T)
 	require.Len(t, upstream.requests, 2)
 	for i := range upstream.bodies {
 		tools := gjson.GetBytes(upstream.bodies[i], "tools").Array()
-		require.Len(t, tools, 6)
+		require.Len(t, tools, 4)
 		require.Equal(t, "Read", tools[0].Get("name").String())
 		require.Equal(t, "Edit", tools[1].Get("name").String())
 		require.Equal(t, "WebSearch", tools[2].Get("name").String())
 		require.Equal(t, "mcp__workspace__bash", tools[3].Get("name").String())
-		require.Equal(t, "web_search", tools[4].Get("type").String())
-		require.Equal(t, "x_search", tools[5].Get("type").String())
 		require.False(t, gjson.GetBytes(upstream.bodies[i], "tool_choice").Exists())
 		require.Empty(t, upstream.requests[i].Header.Get("X-App"))
 		require.Empty(t, upstream.requests[i].Header.Get("anthropic-client-platform"))
@@ -772,8 +770,9 @@ func TestForwardGrokResponsesClaudeDesktopClientToolsUseCacheRoute(t *testing.T)
 	secondIdentity := gjson.GetBytes(upstream.bodies[1], "prompt_cache_key").String()
 	require.NotEmpty(t, firstIdentity)
 	require.Equal(t, firstIdentity, secondIdentity)
-	require.Equal(t, firstIdentity, upstream.requests[0].Header.Get(grokConversationIDHeader))
-	require.Equal(t, secondIdentity, upstream.requests[1].Header.Get(grokConversationIDHeader))
+	require.NotEqual(t, firstIdentity, upstream.requests[0].Header.Get(grokConversationIDHeader))
+	require.Equal(t, upstream.requests[0].Header.Get(grokConversationIDHeader), upstream.requests[1].Header.Get(grokConversationIDHeader))
+	require.NotEqual(t, secondIdentity, upstream.requests[1].Header.Get(grokConversationIDHeader))
 }
 
 func TestGrokResponsesCacheIdentityIncludesPromotedCodexTools(t *testing.T) {
@@ -809,12 +808,8 @@ func TestCodexUnsupportedAdditionalToolsDoNotBecomeToolFreeCacheIntent(t *testin
 	require.False(t, gjson.GetBytes(patched, "tools").Exists())
 	require.False(t, gjson.GetBytes(patched, "tool_choice").Exists())
 
-	mixedCacheIntent := patched
-	patched, err = applyGrokResponsesCacheIdentity(patched, body, "isolated-id", true)
+	patched, err = applyGrokResponsesCacheIdentity(patched, "isolated-id")
 	require.NoError(t, err)
-	account := healthyGrokOAuthGatewayTestAccount(4502, "access-token")
-	account.Credentials["subscription_tier"] = "free"
-	patched, err = applyGrokFreeRequestToolCacheRoute(nil, patched, mixedCacheIntent, account, "isolated-id")
 
 	require.NoError(t, err)
 	require.False(t, gjson.GetBytes(patched, "tools").Exists())
@@ -833,19 +828,70 @@ func TestBuildGrokResponsesRequestUsesAccountBaseURLAndBearerToken(t *testing.T)
 		},
 	}
 
-	req, err := buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "isolated-cache-id", nil)
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "isolated-cache-id", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.MethodPost, req.Method)
 	require.Equal(t, "https://xai.test/v1/responses", req.URL.String())
 	require.Equal(t, "Bearer access-token", req.Header.Get("Authorization"))
 	require.Equal(t, "application/json", req.Header.Get("Content-Type"))
-	require.Contains(t, req.Header.Get("Accept"), "text/event-stream")
+	// A body without `stream` is the plain JSON operation, so Accept declares
+	// application/json rather than SSE.
+	require.Equal(t, "application/json", req.Header.Get("Accept"))
 	require.Equal(t, grokCLIVersion, req.Header.Get("X-Grok-Client-Version"))
 	require.Equal(t, "isolated-cache-id", req.Header.Get(grokConversationIDHeader))
 
 	data, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 	require.Equal(t, `{"model":"grok-4.3"}`, strings.TrimSpace(string(data)))
+}
+
+// A streaming sampler body declares SSE for the upstream operation, matching
+// the frozen sampler's streaming routes. The downstream response format does
+// not select this value: the gateway aggregates SSE for non-streaming clients
+// while still declaring text/event-stream upstream.
+func TestBuildGrokResponsesRequestStreamingBodyDeclaresSSEAccept(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"base_url": "https://xai.test/v1/",
+		},
+	}
+
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(
+		context.Background(), nil, account,
+		[]byte(`{"model":"grok-4.3","input":"hi","stream":true}`),
+		"access-token", "", nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "application/json", req.Header.Get("Content-Type"))
+	require.Equal(t, "text/event-stream", req.Header.Get("Accept"))
+}
+
+// The Accept value follows the final body even when an account header override
+// is stored, so a relay override cannot keep declaring SSE for a JSON call.
+func TestBuildGrokResponsesRequestAcceptIgnoresHeaderOverrides(t *testing.T) {
+	t.Parallel()
+
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url":                "https://relay.example.test/v1",
+			"header_override_enabled": true,
+			"header_overrides": map[string]any{
+				"Accept": "application/json, text/event-stream",
+			},
+		},
+	}
+
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(
+		context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "api-key", "", nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "application/json", req.Header.Get("Accept"))
 }
 
 func TestBuildGrokCompactRequestBodyUsesResponsesCompactionTurn(t *testing.T) {
@@ -920,7 +966,7 @@ func TestBuildGrokResponsesRequestAllowsPublicAPIKeyBaseURLByDefault(t *testing.
 		},
 	}
 
-	req, err := buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "api-key", "", nil)
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "api-key", "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "https://grok.example.test/v1/responses", req.URL.String())
 	require.Equal(t, "Bearer api-key", req.Header.Get("Authorization"))
@@ -939,12 +985,12 @@ func TestBuildGrokResponsesRequestHonorsOAuthOfficialEndpointSwitch(t *testing.T
 		},
 	}
 
-	req, err := buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "", nil)
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "", nil)
 	require.NoError(t, err)
 	require.Equal(t, xai.DefaultBaseURL+"/responses", req.URL.String())
 }
 
-func TestBuildGrokResponsesRequestAppliesHeaderOverridesLast(t *testing.T) {
+func TestBuildGrokResponsesRequestAppliesOnlyOrdinaryHeaderOverrides(t *testing.T) {
 	t.Parallel()
 
 	account := &Account{
@@ -961,14 +1007,14 @@ func TestBuildGrokResponsesRequestAppliesHeaderOverridesLast(t *testing.T) {
 		},
 	}
 
-	req, err := buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "conv-1", nil)
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "access-token", "conv-1", nil)
 	require.NoError(t, err)
 	require.Equal(t, "https://relay.example.test/v1/responses", req.URL.String())
-	// 覆写值优先于内置 CLI 身份头。名字不在 wire casing 映射中的覆写头
-	// 以小写键直写（HTTP/2 线上语义），需按写入形态断言。
-	require.Equal(t, "relay-client/2.0", req.Header.Get("User-Agent"))
-	require.Equal(t, []string{"9.9.9"}, req.Header["x-grok-client-version"])
-	require.Empty(t, req.Header.Get("X-Grok-Client-Version"))
+	// 历史身份覆写不能覆盖可信 CLI 声明；普通中转头仍按原 wire casing 写入。
+	require.Equal(t, defaultGrokUpstreamUserAgent(), req.Header.Get("User-Agent"))
+	require.Equal(t, xai.ResolveCLIVersion(), req.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, xai.CLIClientIdentifier, req.Header.Get("X-Grok-Client-Identifier"))
+	require.NotContains(t, req.Header, "x-grok-client-version")
 	require.Equal(t, []string{"relay-secret"}, req.Header["x-relay-token"])
 	// 会话路由头与认证头不受覆写影响。
 	require.Equal(t, "conv-1", req.Header.Get(grokConversationIDHeader))
@@ -990,7 +1036,7 @@ func TestBuildGrokResponsesRequestIgnoresBlockedHeaderOverrides(t *testing.T) {
 		},
 	}
 
-	req, err := buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "api-key", "conv-2", nil)
+	req, err := (&OpenAIGatewayService{}).buildGrokResponsesRequest(context.Background(), nil, account, []byte(`{"model":"grok-4.3"}`), "api-key", "conv-2", nil)
 	require.NoError(t, err)
 	require.Equal(t, "Bearer api-key", req.Header.Get("Authorization"))
 	require.Equal(t, "conv-2", req.Header.Get(grokConversationIDHeader))
@@ -1228,8 +1274,12 @@ func TestForwardGrokMediaImagesGenerationNormalizesImagineAlias(t *testing.T) {
 	require.Equal(t, http.MethodPost, upstream.lastReq.Method)
 	require.Equal(t, "Bearer api-key", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
-	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.NotEqual(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, xai.ResolveCLIVersion(), upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, "xai-grok-build/1.0.45", upstream.lastReq.Header.Get("User-Agent"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-req-id"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-agent-id"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-model-override"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-session-id"))
 	require.JSONEq(t, `{"model":"grok-imagine-image-quality","prompt":"draw a cat"}`, string(upstream.lastBody))
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.JSONEq(t, `{"data":[{"url":"https://images.test/cat.png"}]}`, recorder.Body.String())
@@ -1567,6 +1617,10 @@ func TestForwardGrokMediaVideoGenerationReturnsUsageAndResponseID(t *testing.T) 
 	result, err := svc.ForwardGrokMedia(context.Background(), c, account, GrokMediaEndpointVideosGenerations, "", body, "application/json")
 	require.NoError(t, err)
 	require.Equal(t, "https://xai.test/v1/videos/generations", upstream.lastReq.URL.String())
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-req-id"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-agent-id"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-grok-model-override"))
+	require.Equal(t, "xai-grok-build/1.0.45", upstream.lastReq.UserAgent())
 	require.JSONEq(t, `{"model":"grok-imagine-video-1.5","prompt":"waves","resolution":"720p","duration":10}`, string(upstream.lastBody))
 	require.Equal(t, "video-request-123", result.ResponseID)
 	require.Equal(t, "grok-imagine-video-1.5", result.BillingModel)
@@ -1703,7 +1757,7 @@ func TestForwardGrokMediaOAuthImageToVideoUsesOfficialAPIForLargeBody(t *testing
 	require.NoError(t, err)
 	require.Equal(t, xai.DefaultBaseURL+"/videos/generations", upstream.lastReq.URL.String())
 	require.Empty(t, upstream.lastReq.Header.Get("X-XAI-Token-Auth"))
-	require.Empty(t, upstream.lastReq.Header.Get("x-grok-client-version"))
+	require.Equal(t, xai.ResolveCLIVersion(), upstream.lastReq.Header.Get("x-grok-client-version"))
 	require.Equal(t, "data:image/png;base64,"+imageData, gjson.GetBytes(upstream.lastBody, "image.url").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "image.image_url").Exists())
 }
@@ -1742,8 +1796,8 @@ func TestForwardGrokMediaVideoStatusUsesGETWithoutBody(t *testing.T) {
 	require.Equal(t, "https://xai.test/v1/videos/request-123", upstream.lastReq.URL.String())
 	require.Equal(t, http.MethodGet, upstream.lastReq.Method)
 	require.Equal(t, "Bearer api-key", upstream.lastReq.Header.Get("Authorization"))
-	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.NotEqual(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, xai.ResolveCLIVersion(), upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, "xai-grok-build/1.0.45", upstream.lastReq.Header.Get("User-Agent"))
 	require.Empty(t, upstream.lastReq.Header.Get("Content-Type"))
 	require.Empty(t, upstream.lastBody)
 	require.Equal(t, http.StatusOK, recorder.Code)
@@ -2019,13 +2073,12 @@ func TestForwardGrokResponsesStreamingDefaultsEmptyModelTo45AndSnapshots(t *test
 	require.NoError(t, err)
 	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"), "official Grok has no OpenAI beta declaration")
 	require.Equal(t, "grok-4.5", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.Equal(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String(), upstream.lastReq.Header.Get(grokConversationIDHeader))
-	require.Equal(t, "web_search", gjson.GetBytes(upstream.lastBody, "tools.0.type").String())
-	require.Equal(t, "x_search", gjson.GetBytes(upstream.lastBody, "tools.1.type").String())
-	require.Equal(t, "none", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists(), "no implicit search authorization")
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tool_choice").Exists())
 	require.Equal(t, "high", gjson.GetBytes(upstream.lastBody, "reasoning_effort").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.True(t, result.Stream)
@@ -2078,8 +2131,8 @@ func TestForwardGrokResponsesAPIKeyUsesXAIResponses(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://api.x.ai/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer xai-test-key", upstream.lastReq.Header.Get("Authorization"))
-	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.NotEqual(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, xai.ResolveCLIVersion(), upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "grok-4.6", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "metadata").Exists())
 	require.Equal(t, "resp_grok_api_key", result.ResponseID)
@@ -2407,8 +2460,8 @@ func TestForwardAsChatCompletionsForGrokAPIKeyUsesConfiguredRawEndpointWithoutOA
 	require.NoError(t, err)
 	require.Equal(t, "https://grok.example.test/v1/chat/completions", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer third-party-key", upstream.lastReq.Header.Get("Authorization"))
-	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.NotEqual(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, xai.ResolveCLIVersion(), upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
 }
 
 func TestForwardAsChatCompletionsForGrokAPIKeyRejectsNonStreamingResponseWithoutUsage(t *testing.T) {
@@ -2513,7 +2566,7 @@ func TestAccountTestServiceGrokAPIKeyAllowsConfiguredHTTPWhenGlobalPolicyDoes(t 
 	require.NoError(t, err)
 	require.Equal(t, "http://grok.example.test/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer third-party-key", upstream.lastReq.Header.Get("Authorization"))
-	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, xai.ResolveCLIVersion(), upstream.lastReq.Header.Get("X-Grok-Client-Version"))
 	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
 }
 
@@ -2873,15 +2926,14 @@ func TestForwardAsAnthropicForGrokUsesXAIResponses(t *testing.T) {
 	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, xai.CLIUserAgent(xai.CLIClientVersion), upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, grokCLIVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.Equal(t, "grok-experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("version"))
 	require.Equal(t, "grok-4.6", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.Equal(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String(), upstream.lastReq.Header.Get(grokConversationIDHeader))
-	require.Equal(t, "web_search", gjson.GetBytes(upstream.lastBody, "tools.0.type").String())
-	require.Equal(t, "x_search", gjson.GetBytes(upstream.lastBody, "tools.1.type").String())
-	require.Equal(t, "none", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists(), "the client did not authorize tools")
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tool_choice").Exists())
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.NotContains(t, string(upstream.lastBody), "chatgpt.com")
@@ -3052,12 +3104,12 @@ func TestForwardAsAnthropicForGrokFunctionToolUsesCacheCapableMixedRoute(t *test
 	require.NotEmpty(t, identity)
 	require.Equal(t, identity, upstream.lastReq.Header.Get(grokConversationIDHeader))
 	tools := gjson.GetBytes(upstream.lastBody, "tools").Array()
-	require.Len(t, tools, 3)
+	require.Len(t, tools, 2)
 	require.Equal(t, "function", tools[0].Get("type").String())
 	require.Equal(t, "lookup", tools[0].Get("name").String())
 	require.Equal(t, "object", tools[0].Get("parameters.type").String())
-	require.Equal(t, "web_search", tools[1].Get("type").String())
-	require.Equal(t, "x_search", tools[2].Get("type").String())
+	require.Equal(t, "function", tools[1].Get("type").String())
+	require.Equal(t, "web_search", tools[1].Get("name").String())
 	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
 
 	require.Equal(t, 7000, result.Usage.InputTokens)

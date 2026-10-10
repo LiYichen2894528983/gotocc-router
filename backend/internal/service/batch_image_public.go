@@ -267,6 +267,8 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	holdID := BatchImageHoldRequestID(batchID)
 	holdAmount := pricingSnapshot.HoldAmount
 	job, err := s.Repo.CreateBatchImageJob(ctx, CreateBatchImageJobParams{
+		TeamWallet:              owner.TeamID != nil,
+		ResellerSnapshot:        ResellerPriceForOptionalGroup(ctx, owner.EffectiveBillingUserID(), owner.GroupID),
 		GroupID:                 owner.GroupID,
 		BatchID:                 batchID,
 		UserID:                  owner.UserID,
@@ -722,8 +724,12 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	if isBatchImageProcessorDoneStatus(job.Status) {
-		if job.Status == BatchImageJobStatusFailed || job.Status == BatchImageJobStatusCancelled {
+		if job.Status == BatchImageJobStatusFailed || job.Status == BatchImageJobStatusCancelled ||
+			(job.Status == BatchImageJobStatusOutputDeleted && job.SettledAt == nil) {
 			if err := releaseBatchImageBalanceHold(ctx, s.BillingRepo, job, batchImageDerefString(job.RequestHash)); err != nil {
+				if errors.Is(err, ErrBatchImageAlreadySettled) {
+					return BatchImageJobToPublic(job), nil
+				}
 				s.enqueueBillingRetry(ctx, job.BatchID)
 				return nil, ErrBatchImageCancelFailed
 			}
@@ -956,9 +962,10 @@ func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, 
 		if err != nil {
 			return nil, nil, err
 		}
+		// 与普通账号调度一致：priority 数值越小越优先，同优先级按 ID 排序。
 		sort.SliceStable(accounts, func(i, j int) bool {
 			if accounts[i].Priority != accounts[j].Priority {
-				return accounts[i].Priority > accounts[j].Priority
+				return accounts[i].Priority < accounts[j].Priority
 			}
 			return accounts[i].ID < accounts[j].ID
 		})
@@ -1053,6 +1060,9 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		groupMultiplier = effectiveGroupMultiplier
 		if group.ImageRateIndependent {
 			groupMultiplier = group.ImageRateMultiplier
+		}
+		if quote := ResellerPriceFromContext(ctx, owner.EffectiveBillingUserID(), group.ID); quote != nil {
+			groupMultiplier = quote.ImageRate
 		}
 		if groupMultiplier < 0 {
 			groupMultiplier = 0

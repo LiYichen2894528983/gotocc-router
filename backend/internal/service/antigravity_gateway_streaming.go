@@ -213,6 +213,11 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamKeepaliveInterval > 0 {
 		keepaliveInterval = time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 	}
+	// go-genai / python-genai 不会忽略 SSE 注释行，收到 ":\n\n" 会直接把整个流判成
+	// invalid stream chunk 而中断（Antigravity CLI 在用 go-genai）。对这类客户端宁可不发心跳。
+	if keepaliveInterval > 0 && downstreamRejectsSSEComments(c) {
+		keepaliveInterval = 0
+	}
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {
 		keepaliveTicker = time.NewTicker(keepaliveInterval)
@@ -319,6 +324,14 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				timing.Observe(startTime, apicompat.ObserveGeminiOutput(observationPayload))
 
 				cw.Fprintf("data: %s\n\n", payload)
+				continue
+			}
+
+			// 上游每个 data 事件后面跟一个空行作为事件分隔。上面已经把 data 行写成
+			// "data: ...\n\n"，若再把这个空行透传出去，事件之间就会变成 "\n\n\n"。
+			// google-genai 的 Go SDK（Antigravity CLI 在用）按 "\n\n" 切事件，多出的
+			// "\n" 会粘到下一个事件开头，前缀变成 "\ndata" 而被判成 invalid stream chunk。
+			if trimmed == "" {
 				continue
 			}
 
@@ -731,13 +744,17 @@ func mergeTextPartsToResponse(response map[string]any, textParts []string) map[s
 	return result
 }
 
+// antigravityStatusClientClosed 是客户端在上游响应前断开时回写的状态码（499 client closed request）。
+const antigravityStatusClientClosed = 499
+
 func (s *AntigravityGatewayService) writeClaudeError(c *gin.Context, status int, errType, message string) error {
 	MarkResponseCommitted(c)
+	clientMessage := sanitizeAntigravityErrorText(message)
 	c.JSON(status, gin.H{
 		"type":  "error",
-		"error": gin.H{"type": errType, "message": message},
+		"error": gin.H{"type": errType, "message": clientMessage},
 	})
-	return fmt.Errorf("%s", message)
+	return fmt.Errorf("%s", clientMessage)
 }
 
 // WriteMappedClaudeError 导出版本，供 handler 层使用（如 fallback 错误处理）
@@ -749,10 +766,15 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 	MarkResponseCommitted(c)
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+	// 返回给客户端的文案额外做一次 Antigravity 身份脱敏（项目号/邮箱/consumer id）。
+	// ops 事件仍保留既有 upstreamMsg/upstreamDetail，行为不变。
+	clientMsg := sanitizeAntigravityErrorText(upstreamMsg)
 	logBody, maxBytes := s.getLogConfig()
 	upstreamDetail := s.getUpstreamErrorDetail(body)
 	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -773,6 +795,7 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 		c, account.Platform, upstreamStatus, body,
 		0, "", "",
 	); matched {
+		ptErrMsg = sanitizeAntigravityErrorText(ptErrMsg)
 		c.JSON(ptStatus, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": ptErrType, "message": ptErrMsg},
@@ -780,7 +803,7 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", upstreamStatus)
 		}
-		return fmt.Errorf("upstream error: %d message=%s", upstreamStatus, upstreamMsg)
+		return fmt.Errorf("upstream error: %d message=%s", upstreamStatus, clientMsg)
 	}
 
 	var statusCode int
@@ -790,7 +813,7 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 	case 400:
 		statusCode = http.StatusBadRequest
 		errType = "invalid_request_error"
-		errMsg = getPassthroughOrDefault(upstreamMsg, "Invalid request")
+		errMsg = sanitizeAntigravityErrorText(getPassthroughOrDefault(upstreamMsg, "Invalid request"))
 	case 401:
 		statusCode = http.StatusBadGateway
 		errType = "authentication_error"
@@ -820,7 +843,7 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 	if upstreamMsg == "" {
 		return fmt.Errorf("upstream error: %d", upstreamStatus)
 	}
-	return fmt.Errorf("upstream error: %d message=%s", upstreamStatus, upstreamMsg)
+	return fmt.Errorf("upstream error: %d message=%s", upstreamStatus, clientMsg)
 }
 
 func (s *AntigravityGatewayService) writeGoogleError(c *gin.Context, status int, message string) error {
@@ -833,20 +856,23 @@ func (s *AntigravityGatewayService) writeGoogleError(c *gin.Context, status int,
 		statusStr = "NOT_FOUND"
 	case 429:
 		statusStr = "RESOURCE_EXHAUSTED"
+	case antigravityStatusClientClosed:
+		statusStr = "CANCELLED"
 	case 500:
 		statusStr = "INTERNAL"
 	case 502, 503:
 		statusStr = "UNAVAILABLE"
 	}
 
+	clientMessage := sanitizeAntigravityErrorText(message)
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"code":    status,
-			"message": message,
+			"message": clientMessage,
 			"status":  statusStr,
 		},
 	})
-	return fmt.Errorf("%s", message)
+	return fmt.Errorf("%s", clientMessage)
 }
 
 // collectClaudeStreamResponse 收集上游流式响应，转换为 Claude 非流式格式返回
@@ -1256,9 +1282,13 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 			s.observeAntigravityGeminiSSELine(c, ev.line)
 
 			// 处理 SSE 行，转换为 Claude 格式
+			// Sample native output before conversion: image markdown and generated
+			// grounding text are not model text tokens, and a batched signature must
+			// not hide the next text/reasoning/tool delta.
+			payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ev.line), "data:"))
+			timing.Observe(startTime, apicompat.ObserveGeminiOutput([]byte(payload)))
 			claudeEvents := processor.ProcessLine(strings.TrimRight(ev.line, "\r\n"))
 			if len(claudeEvents) > 0 {
-				timing.Observe(startTime, observeAnthropicSSEOutput(claudeEvents))
 				cw.Write(claudeEvents)
 			}
 

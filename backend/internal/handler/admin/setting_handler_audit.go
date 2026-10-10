@@ -353,6 +353,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.AffiliateRebateRate != after.AffiliateRebateRate {
 		changed = append(changed, "affiliate_rebate_rate")
 	}
+	if before.AffiliateRebateRateL2 != after.AffiliateRebateRateL2 {
+		changed = append(changed, "affiliate_rebate_rate_l2")
+	}
+	if before.AffiliateRebateRateL3 != after.AffiliateRebateRateL3 {
+		changed = append(changed, "affiliate_rebate_rate_l3")
+	}
 	if before.AffiliateRebateFreezeHours != after.AffiliateRebateFreezeHours {
 		changed = append(changed, "affiliate_rebate_freeze_hours")
 	}
@@ -446,9 +452,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.EnableFingerprintUnification != after.EnableFingerprintUnification {
 		changed = append(changed, "enable_fingerprint_unification")
 	}
-	if before.OpenAITTFTMode != after.OpenAITTFTMode {
-		changed = append(changed, "openai_ttft_mode")
-	}
 	if before.EnableMetadataPassthrough != after.EnableMetadataPassthrough {
 		changed = append(changed, "enable_metadata_passthrough")
 	}
@@ -479,6 +482,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")
 	}
+	if before.OpenAICodexEnvironmentTimezone != after.OpenAICodexEnvironmentTimezone {
+		changed = append(changed, "openai_codex_environment_timezone")
+	}
+	if before.OpenAICodexEgressCountry != after.OpenAICodexEgressCountry {
+		changed = append(changed, "openai_codex_egress_country")
+	}
+	if before.OpenAICodexResidency != after.OpenAICodexResidency {
+		changed = append(changed, "codex_residency")
+	}
 	if before.CodexLegacyClientProfileCompatibilityEnabled != after.CodexLegacyClientProfileCompatibilityEnabled {
 		changed = append(changed, "codex_legacy_client_profile_compatibility_enabled")
 	}
@@ -490,6 +502,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAICodexVersionAutoSyncEnabled != after.OpenAICodexVersionAutoSyncEnabled {
 		changed = append(changed, "openai_codex_version_auto_sync_enabled")
+	}
+	if before.ClaudeCodeClientVersion != after.ClaudeCodeClientVersion {
+		changed = append(changed, "claude_code_client_version")
+	}
+	if before.ClaudeCodeVersionAutoSyncEnabled != after.ClaudeCodeVersionAutoSyncEnabled {
+		changed = append(changed, "claude_code_version_auto_sync_enabled")
 	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")
@@ -579,6 +597,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
 	}
+	if before.SubscriptionEnabled != after.SubscriptionEnabled {
+		changed = append(changed, "subscription_enabled")
+	}
 	if before.ModelPlazaEnabled != after.ModelPlazaEnabled {
 		changed = append(changed, "model_plaza_enabled")
 	}
@@ -602,6 +623,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.GlobalIPAccessControlEnabled != after.GlobalIPAccessControlEnabled {
 		changed = append(changed, "global_ip_access_control_enabled")
+	}
+	if before.CyberPolicyUserAllowlist != after.CyberPolicyUserAllowlist {
+		changed = append(changed, "cyber_policy_user_allowlist")
 	}
 	if before.CyberSessionBlockEnabled != after.CyberSessionBlockEnabled {
 		changed = append(changed, "cyber_session_block_enabled")

@@ -1,5 +1,5 @@
 <template>
-  <div :class="props.embedded ? 'space-y-4' : 'card'">
+  <div v-support-readonly :class="props.embedded ? 'space-y-4' : 'card'">
     <div
       v-if="!props.embedded"
       class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
@@ -71,10 +71,12 @@
 </template>
 
 <script setup lang="ts">
+import { supportReadonly as vSupportReadonly } from '@/directives/supportReadonly'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { userAPI } from '@/api'
+import { extractApiErrorMessage } from '@/utils/apiError'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -107,8 +109,8 @@ const handleChangePassword = async () => {
     await userAPI.changePassword(form.value.old_password, form.value.new_password)
     form.value = { old_password: '', new_password: '', confirm_password: '' }
     appStore.showSuccess(t('profile.passwordChangeSuccess'))
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('profile.passwordChangeFailed'))
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t('profile.passwordChangeFailed')))
   } finally {
     loading.value = false
   }

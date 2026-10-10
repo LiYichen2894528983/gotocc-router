@@ -10,8 +10,10 @@ import (
 	"github.com/LuckyKuang/sub2api-plus/internal/config"
 	"github.com/LuckyKuang/sub2api-plus/internal/payment"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/antigravity"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/cnoauth"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/logger"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/xai"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/zcode"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -24,6 +26,27 @@ func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthCli
 		svc = svc.WithSessionStore(xai.NewRedisSessionStore(redisClient))
 	}
 	return svc
+}
+
+// ProvideZhipuOAuthService creates the ZCode platform account-link service. The
+// session store is Redis-backed when a client is configured so a multi-instance
+// deployment can serve the follow-up poll and create calls from any replica.
+func ProvideZhipuOAuthService(proxyRepo ProxyRepository, oauthClient ZhipuOAuthClient, redisClient *redis.Client) *ZhipuOAuthService {
+	svc := NewZhipuOAuthService(oauthClient, proxyRepo)
+	// wire.go is depguard-exempt for redis; construct the Redis session store here.
+	if redisClient != nil {
+		svc = svc.WithSessionStore(zcode.NewRedisSessionStore(redisClient))
+	}
+	return svc
+}
+
+// ProvideZhipuOffPeakTicketManager creates the off-peak ticket manager and
+// registers it as the request-path ticket provider. Registration happens here so
+// the protocol builder never depends on the settings or account services.
+func ProvideZhipuOffPeakTicketManager(oauthClient ZhipuOffPeakClient) *ZhipuOffPeakTicketManager {
+	manager := NewZhipuOffPeakTicketManager(oauthClient)
+	SetZhipuOffPeakTicketProvider(manager)
+	return manager
 }
 
 // BuildInfo contains build information
@@ -71,6 +94,7 @@ func ProvideAuthService(
 	defaultSubAssigner DefaultSubscriptionAssigner,
 	affiliateService *AffiliateService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	resellerService *ResellerService,
 ) *AuthService {
 	svc := NewAuthService(
 		entClient,
@@ -89,6 +113,7 @@ func ProvideAuthService(
 	)
 	svc.SetTencentCaptchaService(tencentCaptchaService)
 	svc.SetAliyunCaptchaService(aliyunCaptchaService)
+	svc.resellerService = resellerService
 	svc.SetReusableInvitationCodeRepository(reusableInvitationRepo)
 	return svc
 }
@@ -139,12 +164,10 @@ func ProvideTokenRefreshService(
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
 	runtimeBlocker AccountRuntimeBlocker,
-	openAIIdentityResolver *OpenAIGatewayService,
 ) *TokenRefreshService {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
-	svc.SetOpenAIIdentityResolver(openAIIdentityResolver)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
 	svc.SetRefreshAPI(refreshAPI)
 	// 调用侧显式注入后台刷新策略，避免策略漂移
@@ -184,7 +207,7 @@ func ProvideOpenAITokenProvider(
 
 // ProvideOpenAIQuotaService wires the OpenAI quota query/reset service.
 // It depends on the OpenAI token provider for refreshed access tokens and the
-// privacy client factory for the impersonated upstream HTTP client.
+// backend-api client factory for the auxiliary HTTP client.
 func ProvideOpenAIQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -221,6 +244,16 @@ func ProvideOpenAIQuotaAutoResetService(
 	return service
 }
 
+// ProvideOpenAIGroupQuotaFollowResetService starts local event application.
+func ProvideOpenAIGroupQuotaFollowResetService(
+	repo OpenAIGroupQuotaFollowResetRepository,
+	billingCache *BillingCacheService,
+) *OpenAIGroupQuotaFollowResetService {
+	service := NewOpenAIGroupQuotaFollowResetService(repo, billingCache)
+	service.Start()
+	return service
+}
+
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -253,6 +286,19 @@ func ProvideAccountUsageService(
 	return service
 }
 
+func ProvidePluginManager(
+	repo PluginRepository,
+	encryptor SecretEncryptor,
+	cfg *config.Config,
+	hostInfo PluginHostInfo,
+	kvStore PluginKVStore,
+	openAIGatewayService *OpenAIGatewayService,
+) *PluginManager {
+	manager := NewPluginManager(repo, encryptor, cfg, hostInfo, kvStore)
+	manager.SetAccountDirectory(openAIGatewayService)
+	return manager
+}
+
 func ProvideAccountTestService(
 	accountRepo AccountRepository,
 	geminiTokenProvider *GeminiTokenProvider,
@@ -278,6 +324,7 @@ func ProvideAccountTestService(
 	)
 	service.agentIdentityWS = openAIGatewayService
 	service.openAIIdentityResolver = openAIGatewayService
+	service.SetOpenAIGatewayService(openAIGatewayService)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
 	return service
@@ -496,6 +543,7 @@ func ProvideRateLimitService(
 	openAI403CounterCache OpenAI403CounterCache,
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
+	ollamaCloudUsage *OllamaCloudUsageService,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
 	if healthCache, ok := tempUnschedCache.(OpenAIAPIKeyHealthCache); ok {
@@ -505,6 +553,7 @@ func ProvideRateLimitService(
 	svc.SetOpenAI403CounterCache(openAI403CounterCache)
 	svc.SetSettingService(settingService)
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
+	svc.SetOllamaCloudUsageProbeScheduler(ollamaCloudUsage)
 	return svc
 }
 
@@ -814,6 +863,12 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 		logger.LegacyPrintf("service.setting", "Warning: migrate Grok default text model failed: %v", err)
 	}
 	antigravity.SetUserAgentVersionResolver(svc.GetAntigravityUserAgentVersion)
+	svc.installOutboundIdentityResolver()
+	// Materialize the runtime identity declarations a deployment derives from
+	// its own host (the Kimi device set) before the first request, so the
+	// advertised identity is stable across restarts and never depends on an
+	// admin page load. The forwarding path only reads these values.
+	svc.ensureRuntimeOutboundHeaders(context.Background())
 	return svc
 }
 
@@ -827,8 +882,13 @@ func ProvideBillingCacheService(
 	rateRepo UserGroupRateRepository,
 	cfg *config.Config,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	resellerRepo ResellerRepository,
+	teamWalletRepo TeamWalletRepository,
 ) *BillingCacheService {
-	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo)
+	svc := NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo)
+	svc.resellerRepo = resellerRepo
+	svc.teamWalletRepo = teamWalletRepo
+	return svc
 }
 
 // ProvideAPIKeyService wires APIKeyService and connects rate-limit cache invalidation.
@@ -843,12 +903,20 @@ func ProvideAPIKeyService(
 	billingCacheService *BillingCacheService,
 	concurrencyService *ConcurrencyService,
 	teamRepo TeamRepository,
+	resellerRepo ResellerRepository,
 ) *APIKeyService {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
 	svc.SetConcurrencyService(concurrencyService)
 	svc.SetTeamRepository(teamRepo)
+	svc.resellerRepo = resellerRepo
 	return svc
+}
+
+func ProvideAffiliateService(repo AffiliateRepository, settings *SettingService, authCache APIKeyAuthCacheInvalidator, billingCache *BillingCacheService, agents AgentEligibility) *AffiliateService {
+	s := NewAffiliateService(repo, settings, authCache, billingCache)
+	s.agents = agents
+	return s
 }
 
 // ProviderSet is the Wire provider set for all services
@@ -856,9 +924,10 @@ var ProviderSet = wire.NewSet(
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,
-	NewUserService,
+	ProvideResellerUserService,
 	NewClientDisconnectRiskService,
-	NewTeamService,
+	ProvideTeamService,
+	NewCanvasBridgeService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
@@ -889,9 +958,14 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAIVideoTaskRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),
 	NewOAuthService,
+	ProvideClaudeResetCreditService,
+	ProvideOpenCodeGoUsageService,
 	ProvideOpenAIOAuthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
+	ProvideZhipuOAuthService,
+	ProvideCNOAuthService,
+	ProvideZhipuOffPeakTicketManager,
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,
@@ -905,6 +979,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIQuotaAutoResetService,
+	ProvideOpenAIGroupQuotaFollowResetService,
 	ProvideGrokQuotaService,
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,
@@ -962,7 +1037,7 @@ var ProviderSet = wire.NewSet(
 	NewTotpService,
 	NewErrorPassthroughService,
 	NewTLSFingerprintProfileService,
-	NewPluginManager,
+	ProvidePluginManager,
 	NewDigestSessionStore,
 	ProvideIdempotencyCoordinator,
 	ProvideSystemOperationLockService,
@@ -975,7 +1050,10 @@ var ProviderSet = wire.NewSet(
 	NewModelPricingResolver,
 	NewModelPlazaService,
 	ProvideContentModerationService,
-	NewAffiliateService,
+	ProvideAffiliateService,
+	NewAgentService,
+	ProvideAgentEligibility,
+	NewResellerService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,
 	ProvidePaymentOrderExpiryService,
@@ -984,6 +1062,7 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelMonitorRunner,
 	NewChannelMonitorQuotaFetcher,
 	ProvideChannelMonitorV2Service,
+	ProvideChannelMonitorV3Service,
 	ProvideChannelMonitorV2Aggregator,
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
@@ -1068,6 +1147,12 @@ func ProvideChannelMonitorV2Service(repo ChannelMonitorV2Repository, settingServ
 	return svc
 }
 
+func ProvideChannelMonitorV3Service(repo ChannelMonitorV3Repository, settings *SettingService) *ChannelMonitorV3Service {
+	svc := NewChannelMonitorV3Service(repo, settings)
+	svc.Start()
+	return svc
+}
+
 // ProvideChannelMonitorV2Aggregator starts the passive minute-rollup worker.
 // Aggregation only runs when channel_monitor_enabled=true and mode=v2 (and V2 config enabled).
 // Set CHANNEL_MONITOR_V2_DISABLE_AGGREGATOR=1 to skip Start (local demo with seeded facts).
@@ -1078,4 +1163,22 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 	}
 	aggregator.Start()
 	return aggregator
+}
+
+// ProvideClaudeResetCreditService wires the Claude reset query and, with the
+// idempotency store and Redis leases, manual redemption.
+func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeTokenProvider, proxies ProxyRepository, idem *IdempotencyCoordinator, locks LeaderLockCache) *ClaudeResetCreditService {
+	s := NewClaudeResetCreditService(accounts, tokens, proxies)
+	s.ConfigureRedemption(idem, locks)
+	return s
+}
+
+func ProvideCNOAuthService(proxyRepo ProxyRepository, accountRepo AccountRepository, admin AdminService, redisClient *redis.Client, refreshAPI *OAuthRefreshAPI, gateway *OpenAIGatewayService, tester *AccountTestService) *CNOAuthService {
+	svc := NewCNOAuthService(proxyRepo, accountRepo, admin)
+	svc.store = cnoauth.NewStore(redisClient)
+	svc.refreshAPI = refreshAPI
+	svc.modelTester = tester
+	gateway.cnOAuthService = svc
+	tester.cnOAuthService = svc
+	return svc
 }

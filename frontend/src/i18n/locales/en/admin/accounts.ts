@@ -1,5 +1,10 @@
 export default {
     accounts: {
+      videoAccountHint: 'Enter the video provider URL and API key, then bind a Video group. Configure model protocols, parameters and pricing in Channels.',
+      videoBaseUrlHint: 'Use the video provider API origin. Request paths come from the channel model protocol.',
+      videoBaseUrlRequired: 'Enter the video provider URL',
+      videoBaseUrlPlaceholder: 'Video provider API URL',
+
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',
@@ -100,6 +105,12 @@ export default {
       schedulableEnabled: 'Scheduling enabled',
       schedulableDisabled: 'Scheduling disabled',
       failedToToggleSchedulable: 'Failed to toggle scheduling status',
+      priorityQuick: {
+        raise: 'Raise priority (value -1)',
+        lower: 'Lower priority (value +1)',
+        editHint: 'Click to type a value; lower is used first',
+        failed: 'Failed to update priority'
+      },
       groupCountTotal: '{count} groups total',
       platforms: {
         anthropic: 'Anthropic',
@@ -111,6 +122,10 @@ export default {
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
+        minimax: 'MiniMax',
+        stepfun: 'StepFun',
+        opencode_go: 'OpenCode',
+        typesafe: 'TypeSafe / Jev',
       },
       cnProviders: {
         accountMode: {
@@ -152,11 +167,29 @@ export default {
         balance: 'Balance --',
         window5h: '5h',
         windowWeekly: '7d',
+        windowMonthly: '30d',
         probe: 'Query',
         probeTooltip: 'Query the provider quota endpoint for 5-hour / weekly rolling window usage',
         balanceProbeTooltip: 'Query the provider balance endpoint for the account balance',
         balanceLow: 'Insufficient balance',
         noBalanceEndpoint: 'This platform has no balance query endpoint',
+      },
+      opencodeGo: {
+        accountMode: {
+          zen: 'Zen',
+          zenDesc: 'Pay-as-you-go gateway. Consumes account credits, billed per token.',
+          go: 'GO',
+          goDesc: 'Subscription gateway, rate-limited by 5-hour / weekly / monthly usage windows.',
+        },
+        protocolRules: {
+          title: 'Model protocol routing',
+          hint: 'In adaptive mode, each model is sent to a native upstream protocol. Use an exact ID or a trailing * glob (e.g. grok-*, qwen*). The first matching rule wins; unmatched models use Chat Completions.',
+          patternPlaceholder: 'grok-* or deepseek-v4-flash',
+          add: 'Add rule',
+          remove: 'Remove rule',
+          restoreDefaults: 'Restore defaults',
+          fallback: 'Unmatched models → Chat Completions (/v1/chat/completions)',
+        },
       },
       types: {
         oauth: 'OAuth',
@@ -181,6 +214,7 @@ export default {
       status: {
         active: 'Active',
         inactive: 'Inactive',
+        disabled: 'Disabled',
         expired: 'Expired',
         error: 'Error',
         cooldown: 'Cooldown',
@@ -228,7 +262,7 @@ export default {
         baseShort: 'Base',
         stickyShort: 'Sticky',
         ungrouped: 'Ungrouped',
-        hint: 'Displayed as "group / base score / sticky bonus". The base score is computed within the current filtered candidate set and includes priority, load, queue depth, error rate, first-token latency, reset window, quota headroom, billing rate, and related factors. The sticky bonus applies only when sticky weighting is enabled for previous_response_id or session_hash. Higher scores are preferred.'
+        hint: 'Displayed as "group / base score / sticky bonus". The base score is computed within the current filtered candidate set and includes priority, load, queue depth, error rate, first-token latency, reset window, quota headroom, billing rate, and related factors. The sticky bonus applies only when sticky weighting is enabled for previous_response_id or session_hash. These scores describe experimental scoring only. Existing OpenAI sessions keep their account; new sessions use priority, quota pressure and peer rotation instead of score ranking.'
       },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
       ollamaCloud: {
@@ -520,13 +554,21 @@ export default {
       apiKeyRequired: 'API Key *',
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: 'Your Claude Console API Key',
+      upstreamRequestIdHeader: 'Upstream ID',
+      upstreamRequestIdHeaderPlaceholder: 'Leave empty to record nothing',
+      upstreamRequestIdHeaderHelp: {
+        intro: 'Name of the response header in which the direct upstream declares its request ID. The value is recorded in usage details for operations and diagnostics; leave empty to record nothing.',
+        examplesTitle: 'Common values',
+        sub2apiNote: 'Matches the request ID column of its usage log',
+        official: '{platform} official API'
+      },
       // OpenAI specific hints
       openai: {
         baseUrlHint: 'Leave default for official OpenAI API',
         apiKeyHint: 'Your OpenAI API Key',
-        oauthPassthrough: 'Auto passthrough (auth only)',
+        oauthPassthrough: 'HTTP passthrough',
         oauthPassthroughDesc:
-          'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+          'Enables HTTP passthrough for this OpenAI account. The gateway still manages authentication and outbound client identity, with required protocol handling, safety filtering, audit, billing and concurrency controls. Disabling restores standard HTTP forwarding; this switch does not change WebSocket mode.',
         accountUserAgent: 'Account Codex User-Agent',
         accountUserAgentPlaceholder: 'Empty: inherit the global Codex User-Agent',
         accountUserAgentDesc: 'Optional. Overrides the global Codex identity for this account. It must be a supported Codex User-Agent; clearing it restores inheritance. Historical identities require the global Legacy Codex Client Profile Compatibility mode.',
@@ -544,16 +586,19 @@ export default {
           'Disabled by default. Enable to allow responses_websockets_v2 capability (still gated by global and account-type switches).',
         wsMode: 'WS mode',
         wsModeDesc:
-          'Only applies to the current OpenAI account type; account WS modes, including http_bridge, take effect only when the global gateway.openai_ws.mode_router_v2_enabled=true.',
+          'Applies only to the current OpenAI account type. Select Off to disable WS. Other modes use the selected connection method only when gateway.openai_ws.mode_router_v2_enabled=true; otherwise, they use the context pool.',
         wsModeOff: 'Off (off)',
         wsModeCtxPool: 'Context Pool (ctx_pool)',
         wsModePassthrough: 'Passthrough (passthrough)',
         wsModeHttpBridge: 'HTTP Bridge (http_bridge)',
         wsModeShared: 'Shared (shared)',
         wsModeDedicated: 'Dedicated (dedicated)',
-        wsModeConcurrencyHint:
-          'When WS mode is enabled, account concurrency becomes the WS connection pool limit for this account.',
-        wsModePassthroughHint: 'Passthrough mode does not use the WS connection pool.',
+        wsModeCtxPoolHint:
+          'The gateway gets and reuses upstream WS connections from a pool, with the pool limit determined by gateway configuration.',
+        wsModePassthroughHint:
+          'The gateway opens a separate upstream WS connection for each client session, without using a connection pool.',
+        wsModeHttpBridgeHint:
+          'The gateway converts client WS requests to upstream HTTP requests, then converts SSE streaming responses back into WS messages.',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           'Only applies to OpenAI OAuth. This account can use OpenAI WebSocket Mode only when enabled.',
@@ -570,6 +615,9 @@ export default {
         responsesModeForceChatCompletions: 'Force Chat Completions',
         responsesModeTextDisabledHint:
           'Not applicable when the Responses / Chat Completions endpoint is not enabled.',
+        imagesUrlToB64Json: 'Image result URL to base64',
+        imagesUrlToB64JsonDesc:
+          'Only applies to non-streaming Images responses of OpenAI API Key accounts. When an upstream image item has a url but no b64_json, the gateway downloads the url and fills b64_json with its base64 content (url is kept) for clients built on the official API; the response is returned unchanged if the download fails.',
         endpointCapabilities: 'Endpoint capabilities',
         endpointCapabilitiesDesc:
           'Used by account routing. The text endpoint follows the Responses API support setting above and is shown as Responses, Chat Completions, or auto mode; Embeddings independently controls /v1/embeddings.',
@@ -590,9 +638,17 @@ export default {
         planTypeClear: 'Clear (auto-detect)',
         codexCLIOnly: 'Approved Codex client profiles only',
         codexCLIOnlyDesc:
-          'Only applies to OpenAI OAuth. When enabled, only verified Codex request profiles are allowed, including the underlying transport identities shared by official CLI, App, and IDE surfaces. Request headers are spoofable: this does not attest a client binary or by itself determine account sharing.',
+          'Only applies to OpenAI OAuth. When enabled, only verified Codex request profiles are allowed: User-Agent identifies the official transport client, while the official thread or product originator is validated independently. Request headers are spoofable: this does not attest a client binary or by itself determine account sharing.',
         codexFingerprintMode: 'Codex fingerprint convergence',
         codexFingerprintModeDesc: 'For OpenAI OAuth Responses sessions, converge fingerprint-owned client identifiers to account-level stable values. Device-only is the default. Native Compact v2 follows the selected mode; the ChatGPT Codex OAuth legacy compact compatibility path uses only the stable installation identifier. Off disables fingerprint mutation but does not disable Plus cache, security, or session policy.',
+        codexEnvironmentTimezone: 'Codex environment_context timezone',
+        codexEnvironmentTimezoneNone: 'Not set (follow proxy/global)',
+        codexEnvironmentTimezoneDesc:
+          'Overrides the model-visible <timezone> / <current_date> pair inside <environment_context> with this IANA timezone and its current date, so the visible time matches the egress location. Takes precedence over the proxy annotation and the global default; leave empty to follow them.',
+        codexEgressCountry: 'Codex egress country code',
+        codexEgressCountryNone: 'Not set (follow proxy/global)',
+        codexEgressCountryDesc:
+          'Egress country declared for this account (ISO 3166-1 alpha-2, e.g. US). Takes precedence over the proxy annotation and the global default; leave empty to follow them.',
         codexFingerprintOff: 'Off (no fingerprint rewrite)',
         codexFingerprintDevice: 'Device only (default)',
         codexFingerprintSession: 'Device + Session',
@@ -701,6 +757,8 @@ export default {
       modelRestriction: 'Model Restriction (Optional)',
       modelWhitelist: 'Model Whitelist',
       modelMapping: 'Model Mapping',
+      fromModel: 'Request model',
+      toModel: 'Target model',
       selectAllowedModels: 'Select allowed models. Leave empty to support all models.',
       mapRequestModels:
         'Map request models to actual models. Left is the requested model, right is the actual model sent to API.',
@@ -720,15 +778,19 @@ export default {
       syncUpstreamModelsSuccess: 'Synced {count} new model(s) from upstream ({total} upstream total)',
       syncUpstreamModelsNoChanges: 'All {count} upstream model(s) are already in the whitelist',
       syncUpstreamModelsEmpty: 'Upstream returned no models to sync',
+      stepfunModelDiscoveryHint: 'Built-in candidates use model IDs recognized by Step-Code and can be selected before entering credentials. Availability depends on your account, plan and region. Enter an API key or complete OAuth authorization to sync upstream models. An empty whitelist allows all models.',
       syncUpstreamModelsFailed: 'Failed to sync upstream models',
       syncUpstreamModelsError: 'Failed to sync upstream models: {message}',
       syncUpstreamModelsMetadataIncomplete:
-        'Model IDs were synced, but capability metadata is incomplete and was not updated.',
+        'Model IDs were synced, but no capability metadata could be updated.',
+      syncUpstreamModelsMetadataPartial:
+        'Some model capabilities were updated; remaining models are still incomplete.',
       clearAllModels: 'Clear all models',
       customModelName: 'Custom model name',
       enterCustomModelName: 'Enter custom model name',
       addModel: 'Add',
       modelExists: 'Model already exists',
+      modelMappingConflict: 'A mapping already exists for {from} → {to}. Modify or remove it under Model Mapping before adding this whitelist model',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
       poolModeHint: 'Enable when upstream is an account pool; errors won\'t mark local account status',
@@ -743,7 +805,7 @@ export default {
       customErrorCodes: 'Custom Error Codes',
       customErrorCodesHint: 'Only stop scheduling for selected error codes',
       customErrorCodesWarning:
-        'Only selected error codes will stop scheduling. Other errors will return 500.',
+        'Custom error codes only filter normal account-error handling (such as stopping scheduling or marking rate limits). They do not decide whether a request is retried or switched to another account. Unselected errors may still trigger a retry or an account switch, and the status returned to the client depends on the gateway path and error-passthrough rules; it is not always 500. An empty list applies no filtering.',
       customErrorCodes429Warning:
         '429 already has built-in rate limit handling. Adding it to custom error codes will disable the account instead of temporary rate limiting. Are you sure?',
       customErrorCodes529Warning:
@@ -759,8 +821,8 @@ export default {
       headerOverride: {
         title: 'Header Override',
         hint: 'Override same-named request headers on forwarding (case-insensitive)',
-        info: 'Applies to outbound requests of this account only: configured headers override client/gateway-generated headers of the same name before forwarding. Auth headers (authorization, x-api-key) and connection-control headers cannot be overridden.',
-        namePlaceholder: 'Header name (e.g. user-agent)',
+        info: 'Applies to ordinary outbound headers for this account. User-Agent, client identifier/version and SDK identity headers are managed by Outbound identity and cannot be overridden here; legacy identity overrides are ignored. Auth headers (authorization, x-api-key) and connection-control headers cannot be overridden.',
+        namePlaceholder: 'Header name (e.g. x-custom-header)',
         valuePlaceholder: 'Override value (leave empty to skip)',
         addRow: 'Add Header',
         importJson: 'Import JSON',
@@ -774,7 +836,7 @@ export default {
         bulkReplaceHint: 'Saving will replace the existing header override configuration on all selected accounts with the rows below.',
         bulkEmptyRows: 'Add at least one header row before saving, or turn the toggle off to clear existing configuration.',
         invalidName: 'Invalid header name (only letters, digits and !#$%&\'*+-.^_`|~ are allowed)',
-        blockedName: 'This header cannot be overridden (auth and connection-control headers are managed by the system)',
+        blockedName: 'This header cannot be overridden (client identity, auth and connection-control headers are managed by the system)',
         duplicateName: 'Duplicate header name (matching is case-insensitive)',
         invalidValue: 'Invalid header value (control characters are not allowed; max length 8192)',
         tooManyEntries: 'Too many header override entries (max 64)'
@@ -790,9 +852,29 @@ export default {
           official: 'Official API'
         }
       },
-      grokClientToolCache: {
-        title: 'Client Tool Cache (May Change Automatic Tool Selection)',
-        hint: 'For detected Grok Free OAuth accounts, this is enabled by default for client function tools such as Codex and Trae. Turn it off to opt out if the automatic tool-selection behavior is not acceptable.'
+      grokMediaEligibility: {
+        title: 'Media Generation Eligibility',
+        hint: 'Controls whether this Grok OAuth account may be selected for image and video generation.',
+        auto: 'Automatic detection',
+        enabled: 'Force enable',
+        disabled: 'Force disable',
+        current: 'Current decision:',
+        eligible: 'Eligible',
+        ineligible: 'Not eligible',
+        loading: 'Loading eligibility…',
+        loadFailed: 'Unable to load media eligibility',
+        autoHint: 'Automatic detection only clears the manual override; it does not trigger a media request.',
+        forceEnableWarning: 'Force enable bypasses automatic eligibility checks. Use only for accounts confirmed to support image/video generation.',
+        partialSave: 'Other account settings may have been saved, but media eligibility was not updated. Please retry.',
+        reasons: {
+          eligible: 'Paid entitlement confirmed',
+          billing_inconclusive: 'Billing information inconclusive',
+          billing_forbidden: 'Billing endpoint forbidden',
+          billing_free_tier: 'Free tier account',
+          billing_unobserved: 'Billing not observed yet',
+          override_enabled: 'Manually forced enabled',
+          override_disabled: 'Manually forced disabled'
+        }
       },
       autoPauseOnExpired: 'Auto Pause On Expired',
       autoPauseOnExpiredDesc: 'When enabled, the account will auto pause scheduling after it expires',
@@ -802,7 +884,47 @@ export default {
 	  autoPause5hDisabled: 'Disable 5h auto-pause',
 	  autoPause7dDisabled: 'Disable 7d auto-pause',
 	  autoPauseDisabledHint: 'When enabled, this account is never auto-paused (even if a global default threshold is configured).',
-	  autoResetCredit: {
+	  claudeResetCredits: {
+	    count: 'Resets',
+	    countTooltipLoad: 'Check remaining Claude resets (read-only, never consumes one)',
+	    countTooltipRefresh: 'Refresh remaining Claude resets (read-only, never consumes one)',
+	    fetched: 'Checked at {time}',
+	    error: 'Could not check reset credits',
+	    ineligible: 'This account cannot use resets right now',
+	    cooldown: 'Cooldown until {time}',
+	    expiresAt: 'Expires {time}',
+	    expiresAtFull: 'Reset credit expires at: {time}',
+	    clears: 'Clears windows: {windows}',
+	    notUsableNow: 'Not usable now',
+	    requiresLimit: 'Usable only after hitting a limit',
+	    reset: 'Reset',
+	    resetTooltipNeedQuery: 'Check the count first; reset is available once a usable credit is found',
+	    resetTooltipNone: 'No reset can be used right now',
+	    resetTooltipReady: 'Consume 1 reset to clear limit windows (asks for confirmation)',
+	    confirmTitle: 'Confirm Claude Reset',
+	    confirmMessage: 'This will consume 1 reset credit to immediately restore the {windows} window(s) ({count} remaining). This action cannot be undone. Continue?',
+	    windows: {
+	      fiveHour: '5h',
+	      sevenDay: '7d',
+	      sevenDayOverage: '7d overage'
+	    },
+	    outcome: {
+	      reset: 'Reset applied; cleared: {windows}',
+	      alreadyUsed: 'This reset was already used; refreshing to confirm',
+	      cooldown: 'Resets are cooling down; try again later',
+	      cooldownUntil: 'Resets are cooling down until {time}',
+	      notLimited: 'Not at a limit, so nothing was reset and no credit was used',
+	      ineligible: 'This account cannot use resets right now',
+	      unknown: 'Result unconfirmed; further redemption is blocked for now. Check again later',
+	      unavailable: 'Reset service is temporarily unavailable; retry after a while',
+	      inProgress: 'This reset request is still processing; check again shortly',
+	      retryBackoff: 'This reset request just failed; retry after a moment',
+	      busy: 'Another reset is in progress; try again later',
+	      notAvailable: 'No reset can be used right now; no credit was used',
+	      failed: 'Reset request failed'
+	    }
+	  },
+      autoResetCredit: {
 	    title: 'Automatically use reset credits',
 	    hint: 'Uses the earliest-expiring available credit only when actual usage reaches a threshold. Off by default; the account remains paused if no credit is available or reset fails.',
 	    threshold5h: '5h auto-reset threshold (%)',
@@ -961,6 +1083,27 @@ export default {
       },
       // OAuth flow
       oauth: {
+        domestic: {
+          stepfunCallbackHint: 'After sign-in, copy the entire http://127.0.0.1:53683/callback address, including state and the credential, even if the page cannot load. Paste it only into this login form.',
+          stepfunDescription: 'Step Plan browser login returns a request credential. Paste the complete loopback callback URL after login. This credential has no automatic refresh; sign in again if it expires or is revoked.',
+          title: "{platform} OAuth login",
+          description: "Authorize with the official client login. Login credentials stay on the server.",
+          region: "Account region",
+          cn: "China",
+          international: "Global",
+          start: "Sign in with OAuth",
+          reauthorize: "Reauthorize account",
+          open: "Open authorization page",
+          callbackHint: "After authorizing, the browser redirects to http://127.0.0.1:53682/oauth/callback. The page may not load; copy the entire address from the address bar and paste it below.",
+          callback: "Complete callback URL",
+          exchange: "Complete authorization",
+          waiting: "Waiting for authorization…",
+          expired: "Authorization expired. Cancel and start again.",
+          save: "Save new authorization",
+          create: "Create OAuth account",
+          failed: "Authorization could not complete. Check the callback or restart login. If saving failed, check the account list before trying again.",
+          reload: "Authorization saved. Reload the account list.",
+        },
         title: 'Claude Account Authorization',
         authMethod: 'Authorization Method',
         manualAuth: 'Manual Authorization',
@@ -1010,6 +1153,43 @@ export default {
         batchPartialSuccess: 'Partial success: {success} succeeded, {failed} failed',
         batchFailed: 'Batch creation failed',
         // OpenAI specific
+        zhipu: {
+          expired: 'The authorization session expired. Start a new login.',
+          title: 'Link a GLM subscription with ZCode',
+          desc:
+            "Authorize with the provider's official ZCode client. The server keeps the authorization session and polls it, so no callback address is required, and the linked account uses the same endpoints as a pasted key.",
+          unavailable: 'The ZCode link is not configured on this deployment.',
+          waiting: 'Waiting for authorization',
+          providerLabel: 'Provider',
+          providers: { bigmodel: 'BigModel (domestic)', zai: 'Z.ai (international)' },
+          planLabel: 'Subscription',
+          plans: {
+            'individual-coding-plan': 'Individual Coding Plan',
+            'team-coding-plan': 'Team Coding Plan',
+            'start-plan': 'Start Plan',
+            'off-peak': 'Off-peak Idle Plan'
+          },
+          unsupported: 'not supported yet',
+          teamOrganization: 'Organization ID',
+          teamProject: 'Project ID',
+          teamScopeHint: 'A team subscription can own several projects; enter the one this account should use.',
+          openAuthorize: 'Open authorization page',
+          checkNow: 'Check now',
+          cancel: 'Cancel',
+          browserHint: 'Authorize in the browser, then wait here. If the browser cannot return to this page, use the fallback below.',
+          showFallback: 'Authorization did not complete? Paste the callback URL',
+          hideFallback: 'Hide the manual code entry',
+          fallbackPlaceholder: 'Paste the full callback URL (recommended) or just the code',
+          fallbackSubmit: 'Submit code',
+          name: 'Account name',
+          namePlaceholder: 'Leave empty to derive it from the plan',
+          concurrency: 'Concurrency',
+          priority: 'Priority',
+          start: 'Generate authorization URL',
+          starting: 'Starting...',
+          create: 'Create account',
+          authorized: 'Authorized'
+        },
         openai: {
           title: 'OpenAI Account Authorization',
           followSteps: 'Follow these steps to complete OpenAI account authorization:',
@@ -1029,6 +1209,16 @@ export default {
           authCodeHint:
             'You can copy the entire URL or just the code parameter value, the system will auto-detect',
           failedToGenerateUrl: 'Failed to generate OpenAI auth URL',
+          failedToStartDeviceCode: 'Failed to start OpenAI device-code login',
+          failedToPollDeviceCode: 'Failed to complete OpenAI device-code login',
+          deviceCodeAuth: 'Device code',
+          deviceCodeHint: 'Open the verification URL and enter the one-time code. This matches official Codex device-code login.',
+          startDeviceCode: 'Start device-code login',
+          deviceCodeUserCode: 'One-time code',
+          deviceCodeVerificationUrl: 'Verification URL',
+          deviceCodePolling: 'Waiting for authorization…',
+          deviceCodeRestart: 'Restart device-code login',
+          deviceCodeTimeout: 'Device-code login timed out after 15 minutes',
           failedToExchangeCode: 'Failed to exchange OpenAI auth code',
           failedToValidateRT: 'Failed to validate refresh token',
           errors: {
@@ -1483,7 +1673,9 @@ export default {
         grokLastProbe: 'Probe {time}',
         grokLastHeadersSeen: 'Headers {time}',
         passiveSampled: 'Passive',
-        activeQuery: 'Query'
+        activeQuery: 'Query',
+        estimatedTotalCost: 'Est. total ${cost}',
+        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
       },
       openaiQuotaReset: {
         count: 'Credits',

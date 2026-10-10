@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package apicompat
 
 import (
@@ -148,6 +150,20 @@ func TestAnthropicToChatCompletionsRequest_ThinkingDropped(t *testing.T) {
 	// Responses→Chat bridge (see anthropicThinkingToReasoningContent).
 	require.Equal(t, `"answer"`, string(out.Messages[0].Content))
 	require.Empty(t, out.Messages[0].ReasoningContent)
+}
+
+func TestAnthropicToChatCompletionsRequest_ThinkingDisabledOverridesOutputEffort(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:        "gpt-5.6-luna",
+		MaxTokens:    1024,
+		Messages:     []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		Thinking:     &AnthropicThinking{Type: "disabled"},
+		OutputConfig: &AnthropicOutputConfig{Effort: "max"},
+	}
+
+	out, err := AnthropicToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Equal(t, "none", out.ReasoningEffort)
 }
 
 func TestAnthropicToChatCompletionsRequest_ToolChoiceAuto(t *testing.T) {

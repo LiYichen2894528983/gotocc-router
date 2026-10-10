@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package service
 
 import (
@@ -362,7 +364,6 @@ func TestOpenAIGatewayService_Forward_WSv2_ImageGenerationCountsOutputs(t *testi
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
@@ -602,7 +603,7 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersStripsGatewayIdentityAndLocalC
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
 	c.Request.Header.Set("User-Agent", "sub2api-client/1")
-	c.Request.Header.Set(grokClientToolCacheOptInHeader, "prefer-cache")
+	c.Request.Header.Set("X-Grok-Client-Tool-Cache", "prefer-cache")
 
 	svc := &OpenAIGatewayService{}
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
@@ -614,7 +615,7 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersStripsGatewayIdentityAndLocalC
 
 	require.NoError(t, err)
 	require.NotContains(t, strings.ToLower(headers.Get("User-Agent")), "sub2api")
-	require.Empty(t, headers.Get(grokClientToolCacheOptInHeader))
+	require.Empty(t, headers.Get("X-Grok-Client-Tool-Cache"))
 }
 
 func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesNamespacedClientSessionIdentity(t *testing.T) {
@@ -660,7 +661,7 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesNamespacedC
 	)
 	require.NoError(t, resolveErr)
 	require.Equal(t, expectedSessionIdentity, headers.Get("session-id"))
-	require.Equal(t, expectedSessionIdentity, headers.Get("session_id"))
+	require.Empty(t, headers.Get("session_id"), "device mode keeps official session-id spelling only")
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "client-thread"), headers.Get("thread-id"))
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "request", "client-request"), headers.Get("x-client-request-id"))
 }
@@ -692,7 +693,6 @@ func TestOpenAIGatewayService_Forward_WSv2_RewriteModelAndToolCallsOnCompletedEv
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
@@ -758,7 +758,6 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 	cfg := newOpenAIWSV2TestConfig()
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 
 	captureConn := &openAIWSCaptureConn{events: [][]byte{
 		[]byte(`{"type":"response.failed","response":{"id":"resp_failed_1","model":"gpt-5.5","error":{"code":"server_error","message":"Internal error"}}}`),
@@ -868,7 +867,6 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
@@ -941,7 +939,6 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.AllowStoreRecovery = false
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 	captureConn := &openAIWSCaptureConn{
@@ -1005,8 +1002,10 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	expectedSessionIdentity, resolveErr := svc.resolveOpenAIUpstreamPromptCacheHeaderIdentity(c, account, "sess-oauth-1")
 	require.NoError(t, resolveErr)
 	require.Equal(t, expectedSessionIdentity, captureDialer.lastHeaders.Get(codexSessionIDHeader))
-	require.Equal(t, expectedSessionIdentity, captureDialer.lastHeaders.Get("session_id"))
-	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
+	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
+	// conversation_id is never an official Codex header; session/full keeps only
+	// the Plus session_id alias.
+	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID(t *testing.T) {
@@ -1023,7 +1022,6 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
@@ -1120,7 +1118,6 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthUsesControlledOutboundIdentity(t
 			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 			cfg.Gateway.OpenAIWS.AllowStoreRecovery = false
 			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 			captureConn := &openAIWSCaptureConn{
@@ -1186,7 +1183,6 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.AllowStoreRecovery = false
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 	captureConn := &openAIWSCaptureConn{
@@ -1252,7 +1248,6 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 	captureConn := &openAIWSCaptureConn{
@@ -1298,7 +1293,7 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	expectedCacheIdentity, resolveErr := svc.resolveOpenAIUpstreamPromptCacheHeaderIdentity(c, account, "pcache_123")
 	require.NoError(t, resolveErr)
 	require.Equal(t, expectedCacheIdentity, captureDialer.lastHeaders.Get(codexSessionIDHeader))
-	require.Equal(t, expectedCacheIdentity, captureDialer.lastHeaders.Get("session_id"))
+	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 	require.NotNil(t, captureConn.lastWrite)
 	require.True(t, gjson.Get(requestToJSONString(captureConn.lastWrite), "stream").Exists())
@@ -1320,7 +1315,6 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseDoneUsageParsed(t *testing.T)
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 	captureConn := &openAIWSCaptureConn{
@@ -1482,7 +1476,6 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
 
 	svc := &OpenAIGatewayService{
@@ -1520,7 +1513,9 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	require.NoError(t, err)
 	require.NotNil(t, result1)
 
-	sessionHash := svc.GenerateSessionHash(c1, reqBody)
+	// 会话级状态按执行作用域取键（显式 session_id 也在其中），不再是原会话哈希。
+	sessionHash, _ := resolveOpenAIWSExecutionScope(c1, reqBody, getAPIKeyIDFromContext(c1))
+	require.NotEmpty(t, sessionHash)
 	store := svc.getOpenAIWSStateStore()
 	turnState, ok := store.GetSessionTurnState(0, sessionHash)
 	require.True(t, ok)
@@ -1564,7 +1559,6 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 	captureConn := &openAIWSCaptureConn{
@@ -1677,7 +1671,6 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnMetadataInPayloadOnConnReuse(t *t
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
 	captureConn := &openAIWSCaptureConn{
@@ -1798,7 +1791,6 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseSessionConnIsolation(t *test
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 4
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 4
 	cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn = true
 
@@ -1905,7 +1897,6 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReu
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn = false
 
@@ -1971,7 +1962,6 @@ func TestOpenAIGatewayService_Forward_WSv2ReadTimeoutAppliesPerRead(t *testing.T
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
@@ -2055,6 +2045,11 @@ func (d *openAIWSCaptureDialer) Dial(
 	d.dialCount++
 	respHeaders := cloneHeader(d.handshake)
 	d.mu.Unlock()
+	// 桩在连接池关闭旧连接后会复用同一实例：新 dial 语义上是一条新
+	// 连接，重置 closed 标记并保留剩余事件供后续请求消费。
+	if d.conn != nil {
+		d.conn.reopen()
+	}
 	return d.conn, 0, respHeaders, nil
 }
 
@@ -2155,6 +2150,12 @@ func (c *openAIWSCaptureConn) Close() error {
 	defer c.mu.Unlock()
 	c.closed = true
 	return nil
+}
+
+func (c *openAIWSCaptureConn) reopen() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = false
 }
 
 func cloneMapStringAny(src map[string]any) map[string]any {

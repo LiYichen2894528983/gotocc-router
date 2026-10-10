@@ -30,7 +30,7 @@
               <button type="button" class="btn btn-secondary" :disabled="loadingTasks" :title="t('asyncImage.actions.refresh')" @click="() => loadTasks()">
                 <Icon name="refresh" size="md" :class="loadingTasks ? 'animate-spin' : ''" />
               </button>
-              <button type="button" class="btn btn-primary" @click="openCreateDialog">
+              <button v-support-readonly type="button" class="btn btn-primary" @click="openCreateDialog">
                 <Icon name="plus" size="md" class="mr-2" />
                 {{ t('asyncImage.actions.create') }}
               </button>
@@ -66,7 +66,11 @@
           </template>
 
           <template #cell-result="{ row }">
-            <div v-if="taskImageUrls(row).length" class="grid w-[104px] grid-cols-2 gap-1">
+            <div
+              v-if="taskImageUrls(row).length"
+              class="inline-grid gap-1 align-middle"
+              :class="taskImageUrls(row).length === 1 ? 'grid-cols-1' : 'grid-cols-2'"
+            >
               <div
                 v-for="url in taskImageUrls(row)"
                 :key="url"
@@ -88,7 +92,7 @@
               <button type="button" class="icon-button" :title="t('asyncImage.actions.view')" :data-testid="`view-task-${row.task_id}`" @click="selectedTask = row">
                 <Icon name="eye" size="sm" />
               </button>
-              <button
+              <button v-support-readonly
                 v-if="row.status === 'failed'"
                 type="button"
                 class="icon-button icon-button-danger"
@@ -126,7 +130,7 @@
     </TablePageLayout>
 
     <BaseDialog :show="showCreateDialog" :title="t('asyncImage.create.title')" width="wide" @close="closeCreateDialog">
-      <form class="space-y-5" @submit.prevent="submitTask">
+      <form v-support-readonly class="space-y-5" @submit.prevent="submitTask">
         <div v-if="eligibleKeys.length === 0" class="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200">
           {{ t('asyncImage.create.noKeys') }}
         </div>
@@ -350,6 +354,7 @@
 </template>
 
 <script setup lang="ts">
+import { supportReadonly as vSupportReadonly } from '@/directives/supportReadonly'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'

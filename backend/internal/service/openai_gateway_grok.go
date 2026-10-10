@@ -82,16 +82,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		cacheIdentityBody = body
 	}
 	cacheIdentity := resolveGrokCacheIdentity(c, cacheIdentityBody, "", upstreamModel)
-	mixedCacheIntentBody := append([]byte(nil), patchedBody...)
-	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, account.IsGrokOAuth())
+	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, cacheIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
-	}
-	// Free OAuth + client function tools: reuse Messages mixed-tools cache route
-	// (append web_search/x_search so xAI does not force non-cacheable build-free).
-	patchedBody, err = applyGrokFreeRequestToolCacheRoute(c, patchedBody, mixedCacheIntentBody, account, cacheIdentity)
-	if err != nil {
-		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
 	}
 
 	token, _, err := s.getRequestCredential(ctx, c, account)
@@ -110,7 +103,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	upstreamStart := time.Now()
 	var resp *http.Response
 	for attempt := 0; ; attempt++ {
-		upstreamReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity, s.cfg, s.settingService)
+		upstreamReq, buildErr := s.buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity, s.cfg, s.settingService)
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -170,6 +163,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -223,6 +218,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		}
 		result := &OpenAIForwardResult{
 			RequestID:        firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+			UpstreamHeaders:  resp.Header,
 			ResponseID:       responseID,
 			Usage:            usageValue,
 			Model:            originalModel,
@@ -757,16 +753,18 @@ func normalizeGrokReasoningEffortValue(raw, model string) (string, bool) {
 }
 
 // GrokSupportsXHighReasoningEffort reports whether the model advertises and
-// forwards the xhigh reasoning effort (Grok 4.6 and its undated alias).
+// forwards the xhigh reasoning effort (Grok 4.6/4.7 and their aliases).
 func GrokSupportsXHighReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
-	return model == "grok-4.6" || model == "grok-4.6-latest"
+	return model == "grok-4.7" || model == "grok-4.7-latest" ||
+		model == "grok-4.6" || model == "grok-4.6-latest"
 }
 
 func grokSupportsReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
 	switch model {
 	case "grok-4.5", "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
+		"grok-4.7", "grok-4.7-latest",
 		"grok-4.3", "grok-4.3-latest",
 		"grok-3-mini", "grok-3-mini-fast", "grok-4.20-0309-reasoning",
 		"grok-4.20-reasoning", "grok-4.20-multi-agent-0309":
@@ -776,11 +774,14 @@ func grokSupportsReasoningEffort(model string) bool {
 	}
 }
 
-var grokResponsesUnsupportedRecursiveFields = map[string]struct{}{
+// grokUnsupportedRecursiveFields 定义 Grok 平台（Responses 和 Chat Completions）不支持的字段
+var grokUnsupportedRecursiveFields = map[string]struct{}{
 	"external_web_access": {},
 }
 
-func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
+// sanitizeGrokUnsupportedFields 递归移除 Grok 平台不支持的字段
+// 适用于 Responses API 和 Chat Completions API
+func sanitizeGrokUnsupportedFields(body []byte) ([]byte, error) {
 	if !bytes.Contains(body, []byte(`"external_web_access"`)) {
 		return body, nil
 	}
@@ -789,11 +790,14 @@ func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
 	if err := decodeOpenAIJSONUseNumber(body, &payload); err != nil {
 		return nil, err
 	}
-	if !deleteJSONFields(payload, grokResponsesUnsupportedRecursiveFields) {
+	if !deleteJSONFields(payload, grokUnsupportedRecursiveFields) {
 		return body, nil
 	}
 	return marshalOpenAIUpstreamJSON(payload)
 }
+
+// sanitizeGrokResponsesUnsupportedFields 保留旧函数名作为别名，向后兼容
+var sanitizeGrokResponsesUnsupportedFields = sanitizeGrokUnsupportedFields
 
 func deleteJSONFields(value any, fields map[string]struct{}) bool {
 	switch typed := value.(type) {
@@ -1094,10 +1098,21 @@ func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 	}
 
 	rawTools := tools.Array()
+	hosted := map[string]bool{}
+	for _, tool := range rawTools {
+		typ := strings.TrimSpace(tool.Get("type").String())
+		if typ == "web_search" || typ == "x_search" {
+			hosted[typ] = true
+		}
+	}
 	filteredTools := make([]json.RawMessage, 0, len(rawTools))
 	toolsChanged := false
 	for _, tool := range rawTools {
 		toolType := strings.TrimSpace(tool.Get("type").String())
+		if toolType == "function" && hosted[strings.TrimSpace(tool.Get("name").String())] {
+			toolsChanged = true
+			continue
+		}
 		if _, ok := grokResponsesSupportedToolTypes[toolType]; ok {
 			raw := json.RawMessage(tool.Raw)
 			if toolType == "function" && (!tool.Get("parameters").Exists() || tool.Get("parameters").Type == gjson.Null) {
@@ -1400,7 +1415,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	// Image-description probes are auxiliary requests, not conversation turns.
 	// Do not bind them to the caller's Grok prompt-cache identity.
-	upstreamReq, err := buildGrokResponsesRequest(upstreamCtx, c, account, body, token, "", s.cfg, s.settingService)
+	upstreamReq, err := s.buildGrokResponsesRequest(upstreamCtx, c, account, body, token, "", s.cfg, s.settingService)
 	releaseUpstreamCtx()
 	if err != nil {
 		return "", OpenAIUsage{}, fmt.Errorf("build grok composer image bridge request: %w", err)
@@ -1428,6 +1443,8 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -1576,7 +1593,7 @@ func addOpenAIUsage(dst *OpenAIUsage, usage OpenAIUsage) {
 	dst.AudioOutputTokens += usage.AudioOutputTokens
 }
 
-func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, cacheIdentity string, cfg *config.Config, settings ...*SettingService) (*http.Request, error) {
+func (s *OpenAIGatewayService) buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, cacheIdentity string, cfg *config.Config, settings ...*SettingService) (*http.Request, error) {
 	targetURL, err := buildGrokResponsesURL(account, cfg, settings...)
 	if err != nil {
 		return nil, err
@@ -1588,19 +1605,26 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileGrok))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
 	if account.IsGrokOAuth() {
 		applyGrokCLIHeaders(req.Header)
 	}
-	applyGrokCacheHeaders(req.Header, cacheIdentity)
-	if c != nil {
-		if v := c.GetHeader("OpenAI-Beta"); strings.TrimSpace(v) != "" {
-			req.Header.Set("OpenAI-Beta", v)
-		}
-	}
+	applyGrokRequestMetadata(req.Header, body, resolveGrokRequestConversation(c, body, cacheIdentity), account.GetCredential("sub"))
 	// 账号级请求头覆写最后应用，使配置值优先于上面的内置默认头；
 	// 打到官方 CLI 网关时身份头仍由共享传输层最终强制。
 	account.ApplyHeaderOverrides(req.Header)
+	// Accept is a request-owned operation declaration: it follows the streaming
+	// state of the final body and survives account header overrides, so a stored
+	// relay header cannot make the gateway declare SSE for a plain JSON call or
+	// the reverse. The frozen sampler declares SSE only on its streaming routes
+	// (crates/codegen/xai-grok-sampler/src/client.rs:1099,1479,1812); the plain
+	// JSON operation declares application/json. Deriving it from the final body
+	// covers the Responses, Chat, Messages and WS-bridge adapters, including the
+	// downstream non-streaming aggregation case that still streams upstream.
+	req.Header.Set("Accept", grokSamplerAcceptHeader(grokBodyStreamsJSON(body)))
+	// Negotiated request compression owns Content-Encoding exclusively and runs
+	// on the final JSON, after every model/tool/session adaptation and after
+	// the account overrides that must not be able to forge it.
+	s.applyGrokRequestCompression(req, account, body, settings...)
 	return req, nil
 }
 
@@ -1617,8 +1641,7 @@ func applyGrokCLIHeaders(headers http.Header) {
 	headers.Set("X-Grok-Client-Version", version)
 	headers.Set("x-grok-client-version", version)
 	headers.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
-	// Historical mode value expected by some unit tests / older CLI probes.
-	headers.Set("X-Grok-Client-Mode", "interactive")
+	headers.Set("X-Grok-Client-Mode", xai.CLIClientMode)
 }
 
 func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, account *Account, snapshot *xai.QuotaSnapshot) {

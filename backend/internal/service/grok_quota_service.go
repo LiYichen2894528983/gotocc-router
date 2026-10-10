@@ -94,7 +94,7 @@ func (s *GrokQuotaService) QueryQuota(ctx context.Context, accountID int64) (*Gr
 	billingResult, billingErr := s.ProbeBilling(ctx, accountID)
 	if billingErr == nil && billingResult != nil && grokBillingHasAuthoritativeQuota(billingResult.Billing) {
 		if acc, err := s.accountRepo.GetByID(ctx, accountID); err == nil {
-			s.scheduleGrokObservedModelsSync(acc)
+			s.scheduleGrokObservedModelsSync(ctx, acc)
 		}
 		return billingResult, nil
 	}
@@ -122,7 +122,7 @@ func (s *GrokQuotaService) QueryQuota(ctx context.Context, accountID int64) (*Gr
 		probeResult.Persisted = probeResult.Persisted || billingResult.Persisted
 	}
 	if acc, err := s.accountRepo.GetByID(ctx, accountID); err == nil {
-		s.scheduleGrokObservedModelsSync(acc)
+		s.scheduleGrokObservedModelsSync(ctx, acc)
 	}
 	return probeResult, nil
 }
@@ -148,6 +148,7 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	if err != nil {
 		return nil, err
 	}
+	ctx = WithAccountOutboundIdentity(WithOutboundIdentityScope(ctx, nil), account)
 
 	probeModel := grokQuotaProbeModel()
 	body, err := buildGrokQuotaProbeBody(probeModel)
@@ -167,14 +168,17 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
+	// The probe body asks for `stream: true`, so the Accept declaration follows
+	// the operation actually sent (same rule as the sampler builders).
+	req.Header.Set("Accept", grokSamplerAcceptHeader(grokBodyStreamsJSON(body)))
 	if account.IsGrokOAuth() {
 		applyGrokCLIHeaders(req.Header)
 	}
+	applyGrokRequestMetadata(req.Header, body, grokConversationSnapshot{}, account.GetCredential("sub"))
 	// 探测请求与真实转发保持同一套账号级请求头覆写，避免探测通过但转发失败。
 	account.ApplyHeaderOverrides(req.Header)
 
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
+	resp, err := s.httpUpstream.Do(prepareAccountOutboundRequest(req, account), proxyURL, account.ID, maxInt(account.Concurrency, 1))
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "upstream probe failed: %v", err)
 	}
@@ -271,6 +275,7 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 	if err != nil {
 		return nil, err
 	}
+	ctx = WithAccountOutboundIdentity(WithOutboundIdentityScope(ctx, nil), account)
 
 	probeCtx, cancel := context.WithTimeout(ctx, grokQuotaUpstreamTimeout)
 	defer cancel()
@@ -353,7 +358,7 @@ func (s *GrokQuotaService) runProbeFlight(
 		return nil, infraerrors.New(http.StatusInternalServerError, "GROK_QUOTA_NOT_CONFIGURED", "grok quota service is not configured")
 	}
 	resultCh := s.probeFlight.DoChan(key, func() (any, error) {
-		sharedCtx, cancel := context.WithTimeout(context.Background(), grokQuotaUpstreamTimeout+5*time.Second)
+		sharedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grokQuotaUpstreamTimeout+5*time.Second)
 		defer cancel()
 		return probe(sharedCtx)
 	})
@@ -390,9 +395,12 @@ func (s *GrokQuotaService) fetchBilling(
 			return nil, 0, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build billing request: %v", err)
 		}
 		xai.ApplyCLIBillingHeaders(req, token)
+		if userID := strings.TrimSpace(account.GetCredential("sub")); userID != "" {
+			req.Header.Set("x-userid", userID)
+		}
 		// billing 探测与真实转发保持同一套账号级请求头覆写。
 		account.ApplyHeaderOverrides(req.Header)
-		resp, requestErr := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 2))
+		resp, requestErr := s.httpUpstream.Do(prepareAccountOutboundRequest(req, account), proxyURL, account.ID, maxInt(account.Concurrency, 2))
 
 		statusCode := 0
 		var bodyBytes []byte
@@ -503,7 +511,10 @@ func (s *GrokQuotaService) prepareProbe(ctx context.Context, accountID int64) (*
 	}
 	proxyURL := s.resolveProxyURL(ctx, account)
 
-	token, err := s.tokenProvider.GetAccessToken(ctx, account)
+	// Quota diagnostics must remain available while scheduling is paused (for
+	// example after a 402). Use the same credential checks and refresh protocol
+	// as an admin connection test, without the model-request scheduling gate.
+	token, err := s.tokenProvider.GetAccessTokenForManualTest(ctx, account)
 	if err != nil {
 		return nil, "", "", infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_TOKEN_UNAVAILABLE", "failed to acquire access token: %v", err)
 	}

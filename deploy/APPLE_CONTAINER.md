@@ -6,7 +6,7 @@ Sub2API Plus can run as a native stack with Apple's `container` CLI. This workfl
 
 Apple `container` support is intended for local development and operator-managed deployments on a Mac. Docker Compose remains the recommended production deployment path.
 
-Apple `container` 1.1 does not provide restart policies, automatic startup, workload health scheduling, a Docker API socket, or full Compose orchestration. `apple-container.sh` supplies ordered startup and readiness checks when you invoke it, but it is not a continuously running supervisor.
+Apple `container` 1.1 does not provide restart policies, automatic startup, workload health scheduling, a Docker API socket, or full Compose orchestration. `apple-container.sh` supplies ordered startup and readiness checks when you invoke it. Inside the application container, a small supervisor relaunches the Sub2API process after the Web UI requests a restart; it does not restart stopped containers or the stack itself.
 
 ## Requirements
 
@@ -15,6 +15,11 @@ Apple `container` 1.1 does not provide restart policies, automatic startup, work
 - Apple `container` 1.1.0 or newer
 - `openssl` for generating initial secrets
 - Local Network access for `container-runtime-linux` when macOS prompts during the first published-container startup
+
+Running `up` and `upgrade` uses the published image and needs nothing else.
+Building the application image locally with `container build` additionally needs
+an Apple Builder with at least 8 GiB of memory; the 2 GiB default is killed by
+the frontend production build. See [Disk Lifecycle](#disk-lifecycle).
 
 Install Apple `container` from its [official releases](https://github.com/apple/container/releases), then verify it:
 
@@ -41,7 +46,7 @@ nano .env
 ./apple-container.sh status
 ```
 
-Open `http://localhost:8080`. If `ADMIN_PASSWORD` is empty, retrieve the generated password with:
+Open `http://localhost:8080`. If `ADMIN_EMAIL` / `ADMIN_PASSWORD` are empty, retrieve the generated admin email (login username) and password with:
 
 ```bash
 ./apple-container.sh logs app
@@ -197,6 +202,10 @@ After a host reboot or `container system stop`, run `./apple-container.sh up` ag
 
 ## Disk Lifecycle
 
+For local deployments operated through `skills/deploy-cli`, follow the shared
+[deployment lifecycle](DEPLOYMENT_LIFECYCLE.md), including single-Web-container
+replacement and bounded application-image retention after health checks.
+
 Apple Containers gives each running container a separate lightweight VM root
 filesystem. `container system df` therefore reports an active container size
 even when the files visible inside that container are small. Normal `up`
@@ -227,6 +236,21 @@ the builder can be stopped without deleting its cache:
 ```bash
 container builder stop
 ```
+
+Local image builds also need enough builder memory. The frontend stage runs
+`pnpm run build` with `NODE_OPTIONS=--max-old-space-size=3072`, and the default
+builder allocation (2 CPU / 2 GiB) is killed with `cannot allocate memory`
+(exit 137) while `vite build` runs. Start the builder with at least 8 GiB before
+`container build`:
+
+```bash
+container builder stop
+container builder start --cpus 6 --memory 8G
+```
+
+`container builder status` reports the active allocation. Raising it is not a
+cache change and needs no rebuild: the builder keeps its cached layers, and a
+build that a 2 GiB builder already killed simply resumes.
 
 Delete the builder and its reusable build cache only after confirming it is not
 shared by another project and a subsequent full rebuild is acceptable:
@@ -266,22 +290,22 @@ the release workflow preserves the leading `v` and replaces only `+` with
 `-`. The current mapping is:
 
 ```text
-Git/GitHub:         v0.2.0+custom.004
-Application:        0.2.0+custom.004
-Apple/OCI image:    ghcr.io/skyqingname/sub2api-plus:v0.2.0-custom.004
+Git/GitHub:         v0.2.14+custom.002
+Application:        0.2.14+custom.002
+Apple/OCI image:    ghcr.io/skyqingname/sub2api-plus:v0.2.14-custom.002
 ```
 
 Use the following values when building or publishing this OCI image:
 
 ```bash
 docker build \
-  --build-arg VERSION=0.2.0+custom.004 \
-  --tag ghcr.io/skyqingname/sub2api-plus:v0.2.0-custom.004 \
+  --build-arg VERSION=0.2.14+custom.002 \
+  --tag ghcr.io/skyqingname/sub2api-plus:v0.2.14-custom.002 \
   .
 ```
 
 After that image is available to the Apple `container` runtime, set
-`APPLE_CONTAINER_SUB2API_IMAGE=ghcr.io/skyqingname/sub2api-plus:v0.2.0-custom.004`. Until then, keep
+`APPLE_CONTAINER_SUB2API_IMAGE=ghcr.io/skyqingname/sub2api-plus:v0.2.14-custom.002`. Until then, keep
 the published image as the runtime base and use `APPLE_CONTAINER_SUB2API_BINARY`
 for the custom binary.
 
@@ -321,7 +345,7 @@ Apple-specific handling of shared settings:
 
 ### Local MinIO for Async Images
 
-Set `MINIO_ENABLED=true` in `deploy/.env` to run MinIO as part of this stack. On the first `up`, the script writes a default `MINIO_ROOT_USER` when needed and generates a random `MINIO_ROOT_PASSWORD` if it is empty. The env file must remain mode `0600`.
+Set `MINIO_ENABLED=true` in `deploy/.env` to run MinIO as part of this stack. On the first `up`, the script writes a default `MINIO_ROOT_USER` when needed and generates a random `MINIO_ROOT_PASSWORD` if it is empty. The env file must remain mode `0600`. The neutral default access ID `storage-admin` keeps the project name out of S3 Authorization headers. Existing installations using a branded access ID must update their private environment and recreate only the MinIO and Web containers with the existing data mounts; do not change the bucket or delete its data.
 
 ```dotenv
 MINIO_ENABLED=true
@@ -329,7 +353,7 @@ APPLE_CONTAINER_MINIO_IMAGE=pgsty/minio:RELEASE.2026-06-18T00-00-00Z
 MINIO_BIND_HOST=127.0.0.1
 MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
-MINIO_ROOT_USER=sub2api-minio
+MINIO_ROOT_USER=storage-admin
 MINIO_ROOT_PASSWORD=
 MINIO_BUCKET=sub2api-images
 MINIO_REGION=us-east-1
@@ -349,7 +373,7 @@ The script creates only resources carrying the `org.sub2api.stack=apple-containe
 | Network | `sub2api-apple` |
 | Volumes | `sub2api-apple-data`, `sub2api-apple-postgres-data`, `sub2api-apple-redis-data`, `sub2api-apple-minio-data` |
 
-The PostgreSQL volume is mounted at `/var/lib/postgresql`, retaining PostgreSQL 18's default child data directory. Sub2API Plus and Redis also store data in child directories below their Apple volume mount points. This is required because Apple named volumes do not have Docker's copy-up and mount-point ownership behavior.
+The PostgreSQL volume is mounted at `/var/lib/postgresql`, retaining PostgreSQL 18's default child data directory. Sub2API Plus data and its updatable runtime binary use separate child directories in `sub2api-apple-data`; Redis also stores data below its Apple volume mount point. This is required because Apple named volumes do not have Docker's copy-up and mount-point ownership behavior.
 
 ## Networking
 
@@ -365,6 +389,14 @@ directory or `sub2api-apple-data`; deployment never clears that persistent
 storage.
 
 The script checks the published `/health` endpoint from macOS before reporting success. Approve the Local Network prompt on first startup. If the internal probe succeeds but the host-port probe fails with a connection reset, enable Local Network access for `container-runtime-linux`, run `container system stop` followed by `container system start`, and then run `up` again. Runtime upgrades may prompt for permission again.
+
+## Web UI Updates
+
+The Web UI uses the same update flow as the Docker deployment: it downloads a release over GitHub, atomically replaces the active executable, and asks the application to restart. Docker supplies the restart policy in a Compose deployment; `apple-container.sh` supplies an equivalent process supervisor inside the Apple application container.
+
+The active executable lives in `sub2api-apple-data` so a later `up`, `restart`, or `up --recreate` does not discard an update downloaded from the Web UI. The script records the configured base image ID alongside it; when `APPLE_CONTAINER_SUB2API_IMAGE` resolves to a different image ID, the image's `/app/sub2api` becomes the new active executable. This keeps explicit image upgrades authoritative while preserving in-place updates across routine application-container recreation.
+
+If GitHub is not reachable directly, set `UPDATE_PROXY_URL` to a proxy address reachable from the Apple container VM. A proxy listening only on the Mac's `127.0.0.1` is not reachable as `127.0.0.1` from inside the VM; use an appropriately restricted host gateway listener instead.
 
 ## Backup and Upgrade
 
@@ -450,3 +482,14 @@ container system start
 - Named volume backup and restore must be tested before using this workflow for important data.
 - The script targets native `linux/arm64` images. The normal Sub2API Plus release publishes an arm64 variant.
 - Runtime environment values, including credentials, are retained in Apple container configuration and are visible to users who can inspect the local runtime.
+
+### Image generation main model
+
+`SUB2API_IMAGES_MAIN_MODEL` in `.env` selects the Responses model used for image
+generation and defaults to `gpt-5.6-luna`. The Apple Container launcher passes
+the application environment file through, including this setting.
+
+`APPLE_CONTAINER_NETWORK_SUBNET` optionally selects the IPv4 subnet when creating
+the Apple Container network. A configured subnet must match an existing network;
+the launcher reports a mismatch with the migration command before starting the
+application. Keep this unset to use the runtime default.

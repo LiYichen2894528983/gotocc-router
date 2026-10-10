@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuckyKuang/sub2api-plus/internal/config"
 	infraerrors "github.com/LuckyKuang/sub2api-plus/internal/pkg/errors"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/logger"
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/pagination"
@@ -21,6 +22,11 @@ import (
 
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
+	if groupID > 0 {
+		if err := s.ValidateAccountGroupBindings(ctx, []int64{groupID}); err != nil {
+			return nil, 0, err
+		}
+	}
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
 	accounts, result, err := s.accountRepo.ListWithFilters(ctx, params, platform, accountType, status, search, groupID, privacyMode)
 	if err != nil {
@@ -144,6 +150,11 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"codex_7d_reset_after_seconds":           {},
 	"codex_7d_window_minutes":                {},
 	"codex_7d_reset_at":                      {},
+	"codex_limit_name":                       {},
+	"codex_credits_has_credits":              {},
+	"codex_credits_unlimited":                {},
+	"codex_credits_balance":                  {},
+	"codex_rate_limit_families":              {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
@@ -282,6 +293,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	}
 	autoPauseOnExpired := source.AutoPauseOnExpired
 	groups, groupIDs := duplicateAccountGroups(source)
+	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
+		return nil, err
+	}
 	proxyID := source.ProxyID
 	if source.ProxyFallbackOriginID != nil {
 		// Proxy fallback is transient runtime state; duplicate the configured origin.
@@ -312,7 +326,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
-	if err := s.normalizeOpenAIAccountUserAgent(ctx, source.Platform, input.Credentials); err != nil {
+	if err := s.normalizeOpenAIAccountUserAgent(ctx, source.Platform, source.Type, input.Credentials); err != nil {
+		return nil, err
+	}
+	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
 	duplicate, err := buildAccountForCreate(input, accountExtra)
@@ -400,6 +417,18 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if input.Platform == PlatformVideo {
+		if input.Type != AccountTypeAPIKey {
+			return nil, infraerrors.BadRequest("VIDEO_API_KEY_REQUIRED", "Video 账号使用 API Key")
+		}
+		base, _ := input.Credentials["base_url"].(string)
+		if strings.TrimSpace(base) == "" {
+			return nil, infraerrors.BadRequest("VIDEO_BASE_URL_REQUIRED", "请填写视频供应商地址")
+		}
+	}
+	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
+		return nil, errors.New("typesafe accounts only support apikey credentials")
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, "upstream_billing_probe_enabled")
 	delete(accountExtra, "upstream_billing_rate_sync_enabled")
@@ -468,6 +497,12 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
+		return nil, err
+	}
+	if err := ValidateEgressCountryExtra(accountExtra); err != nil {
+		return nil, err
+	}
 
 	// 绑定分组
 	groupIDs := input.GroupIDs
@@ -500,14 +535,20 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
+	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+		return nil, err
+	}
 	// Never persist ephemeral SSO/password secrets after OAuth conversion.
 	input.Credentials = SanitizeStoredCredentials(input.Platform, input.Credentials)
-	if err := s.normalizeOpenAIAccountUserAgent(ctx, input.Platform, input.Credentials); err != nil {
+	if err := s.normalizeOpenAIAccountUserAgent(ctx, input.Platform, input.Type, input.Credentials); err != nil {
 		return nil, err
 	}
 
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
 	_, policyConfigured, _ := account.OpenAIOAuthSessionPolicy()
@@ -539,29 +580,17 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	// OAuth 账号：创建后异步设置隐私。
-	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
-	if account.Type == AccountTypeOAuth {
-		switch account.Platform {
-		case PlatformOpenAI:
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_openai_privacy_panic", "account_id", account.ID, "recover", r)
-					}
-				}()
-				s.EnsureOpenAIPrivacy(context.Background(), account)
+	// OAuth 账号：创建后异步设置隐私（仅 Antigravity；官方 Codex 不在登录期
+	// PATCH 训练开关，OpenAI 账号的隐私由管理员经 set-privacy 手动设置）。
+	if account.Type == AccountTypeOAuth && account.Platform == PlatformAntigravity {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
+				}
 			}()
-		case PlatformAntigravity:
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
-					}
-				}()
-				s.EnsureAntigravityPrivacy(context.Background(), account)
-			}()
-		}
+			s.EnsureAntigravityPrivacy(context.Background(), account)
+		}()
 	}
 
 	return account, nil
@@ -571,6 +600,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if account.Platform == PlatformTypeSafe && input.Type != "" && input.Type != AccountTypeAPIKey {
+		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
 	var credentialParent *Account
 	// Keep the pre-update policy so a group-list change can rotate the session
@@ -598,6 +630,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		normalizedExtra, err = normalizeOpenAIAutoResetCreditExtra(account.Platform, effectiveType, account.IsShadow(), normalizedExtra)
 		if err != nil {
+			return nil, err
+		}
+		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
+			return nil, err
+		}
+		if err := ValidateEgressCountryExtra(normalizedExtra); err != nil {
 			return nil, err
 		}
 	} else {
@@ -664,9 +702,19 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
 			return nil, err
 		}
+		if err := NormalizeOpenCodeGoProtocolRulesCredentials(account.Credentials); err != nil {
+			return nil, err
+		}
 		// Strip SSO/password residue that must never sit next to OAuth tokens.
 		account.Credentials = SanitizeStoredCredentials(account.Platform, account.Credentials)
-		if err := s.normalizeOpenAIAccountUserAgent(ctx, account.Platform, account.Credentials); err != nil {
+		if err := s.normalizeOpenAIAccountUserAgent(ctx, account.Platform, account.Type, account.Credentials); err != nil {
+			return nil, err
+		}
+	}
+	// Changing the auth type can change the required family (MiniMax OAuth vs
+	// API Key), even when the caller sends no credential patch.
+	if !account.IsCredentialShadow() && input.Type != "" && len(input.Credentials) == 0 {
+		if err := NormalizeAccountOutboundIdentity(account.Platform, account.Type, account.Credentials); err != nil {
 			return nil, err
 		}
 	}
@@ -817,6 +865,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := s.validateGroupIDsExist(ctx, *groupIDsToBind); err != nil {
 			return nil, err
 		}
+		if err := s.ValidateAccountGroupBindings(ctx, *groupIDsToBind); err != nil {
+			return nil, err
+		}
 
 		// 检查混合渠道风险（除非用户已确认）
 		if !input.SkipMixedChannelCheck {
@@ -885,7 +936,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 // normalizeOpenAIAccountUserAgent makes account validation observe the same
 // global policy snapshot used later by outbound identity resolution.
-func (s *adminServiceImpl) normalizeOpenAIAccountUserAgent(ctx context.Context, platform string, credentials map[string]any) error {
+func (s *adminServiceImpl) normalizeOpenAIAccountUserAgent(ctx context.Context, platform, accountType string, credentials map[string]any) error {
+	if err := validateStepFunCredentials(platform, accountType, credentials); err != nil {
+		return err
+	}
+	if err := NormalizeAccountOutboundIdentity(platform, accountType, credentials); err != nil {
+		return err
+	}
 	allowLegacyCompatibility := false
 	if s != nil && s.settingService != nil {
 		_, allowLegacyCompatibility = s.settingService.GetOpenAICodexOutboundProfile(ctx)
@@ -908,6 +965,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	if err := normalizeCodexFingerprintModeUpdateExtra(updates); err != nil {
+		return err
+	}
+	if err := ValidateEgressCountryExtra(updates); err != nil {
 		return err
 	}
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
@@ -943,6 +1003,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if err := normalizeCodexFingerprintModeUpdateExtra(input.Extra); err != nil {
 		return nil, err
 	}
+	if err := ValidateEgressCountryExtra(input.Extra); err != nil {
+		return nil, err
+	}
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
@@ -963,6 +1026,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if input.GroupIDs != nil {
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
+			return nil, err
+		}
+		if err := s.ValidateAccountGroupBindings(ctx, *input.GroupIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -1078,10 +1144,29 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
+	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+		return nil, err
+	}
 	// Bulk may mix platforms; always drop ephemeral SSO/password keys (cookie
 	// only when platform is known Grok — empty platform still strips password/*).
 	if input.Credentials != nil {
 		input.Credentials = SanitizeStoredCredentials("", input.Credentials)
+	}
+	if err := normalizeBulkAccountOutboundIdentity(input.Credentials, cachedTargets); err != nil {
+		return nil, err
+	}
+	if raw, supplied := input.Credentials["user_agent"]; supplied {
+		for _, account := range cachedTargets {
+			if account == nil || account.Platform != PlatformOpenAI {
+				continue
+			}
+			candidate := map[string]any{"user_agent": raw}
+			if err := s.normalizeOpenAIAccountUserAgent(ctx, account.Platform, account.Type, candidate); err != nil {
+				return nil, err
+			}
+			// Keep null in the JSONB delta when the administrator clears the UA.
+			input.Credentials["user_agent"] = candidate["user_agent"]
+		}
 	}
 
 	// Prepare bulk updates for columns and JSONB fields.
@@ -1338,6 +1423,9 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 				}
 			}
 		}
+	}
+	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
+		return nil, err
 	}
 	policy, policyConfigured, policyValid := parent.OpenAIOAuthSessionPolicy()
 	if policyConfigured && !policyValid {
@@ -1618,6 +1706,35 @@ func (s *adminServiceImpl) validateGroupIDsExist(ctx context.Context, groupIDs [
 	return nil
 }
 
+// ValidateAccountGroupBindings is the shared fail-closed policy boundary for
+// every account path that accepts explicit group bindings.
+func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error {
+	if len(groupIDs) == 0 || s.cfg == nil || s.cfg.RunMode != config.RunModeSimple {
+		return nil
+	}
+	if s.groupRepo == nil {
+		return errors.New("group repository not configured")
+	}
+	seen := make(map[int64]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if groupID <= 0 {
+			return fmt.Errorf("get group: %w", ErrGroupNotFound)
+		}
+		if _, ok := seen[groupID]; ok {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		group, err := s.groupRepo.GetByIDLite(ctx, groupID)
+		if err != nil {
+			return fmt.Errorf("get group: %w", err)
+		}
+		if !IsGroupBindableInSimpleMode(group) {
+			return infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups cannot be bound in simple mode")
+		}
+	}
+	return nil
+}
+
 // CheckMixedChannelRisk checks whether target groups contain mixed channels for the current account platform.
 func (s *adminServiceImpl) CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {
 	return s.checkMixedChannelRisk(ctx, currentAccountID, currentAccountPlatform, groupIDs)
@@ -1662,8 +1779,6 @@ func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) erro
 	return s.accountRepo.ResetQuotaUsedAndClearRateLimitCooldown(ctx, id)
 }
 
-// EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，
-// 未设置则调用 disableOpenAITraining 并持久化到 Extra，返回设置的 mode 值。
 func (s *adminServiceImpl) resolveOpenAIOutboundIdentity(ctx context.Context, account *Account) openAIOutboundIdentity {
 	var settingService *SettingService
 	if s != nil {
@@ -1672,45 +1787,9 @@ func (s *adminServiceImpl) resolveOpenAIOutboundIdentity(ctx context.Context, ac
 	return resolveOpenAIOutboundIdentityFromSettings(ctx, account, settingService)
 }
 
-func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Account) string {
-	// 影子账号不持凭据，隐私设置由母账号管理，直接跳过。
-	if account.IsCredentialShadow() {
-		return ""
-	}
-	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
-		return ""
-	}
-	if s.privacyClientFactory == nil {
-		return ""
-	}
-	if shouldSkipOpenAIPrivacyEnsure(account.Extra) {
-		return ""
-	}
-
-	token, _ := account.Credentials["access_token"].(string)
-	if token == "" {
-		return ""
-	}
-
-	var proxyURL string
-	if account.ProxyID != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
-	}
-
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL, s.resolveOpenAIOutboundIdentity(ctx, account))
-	if mode == "" {
-		return ""
-	}
-
-	_ = s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode})
-	return mode
-}
-
 // ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
+// 这是管理员手动入口；官方 Codex 不会在登录/刷新时 PATCH 训练开关。
 func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Account) string {
-	// 影子账号不持凭据,隐私由母账号管理,直接跳过(与 EnsureOpenAIPrivacy 一致——外审第4轮)。
 	if account.IsCredentialShadow() {
 		return ""
 	}
@@ -1733,7 +1812,13 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		}
 	}
 
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL, s.resolveOpenAIOutboundIdentity(ctx, account))
+	chatGPTAccountID, _ := account.Credentials["chatgpt_account_id"].(string)
+	var settings *SettingService
+	if s != nil {
+		settings = s.settingService
+	}
+	ctx = withManagedOpenAICodexResidency(ctx, settings)
+	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL, chatGPTAccountID, s.resolveOpenAIOutboundIdentity(ctx, account))
 	if mode == "" {
 		return ""
 	}

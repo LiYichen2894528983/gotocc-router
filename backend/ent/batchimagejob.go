@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"github.com/LuckyKuang/sub2api-plus/ent/batchimagejob"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/reseller"
 )
 
 // BatchImageJob is the model entity for the BatchImageJob schema.
@@ -17,6 +19,10 @@ type BatchImageJob struct {
 	config `json:"-"`
 	// ID of the ent.
 	ID int64 `json:"id,omitempty"`
+	// ResellerSnapshot holds the value of the "reseller_snapshot" field.
+	ResellerSnapshot *reseller.Snapshot `json:"reseller_snapshot,omitempty"`
+	// TeamWallet holds the value of the "team_wallet" field.
+	TeamWallet bool `json:"team_wallet,omitempty"`
 	// BatchID holds the value of the "batch_id" field.
 	BatchID string `json:"batch_id,omitempty"`
 	// UserID holds the value of the "user_id" field.
@@ -113,7 +119,9 @@ func (*BatchImageJob) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case batchimagejob.FieldAllowanceReserved:
+		case batchimagejob.FieldResellerSnapshot:
+			values[i] = new([]byte)
+		case batchimagejob.FieldTeamWallet, batchimagejob.FieldAllowanceReserved:
 			values[i] = new(sql.NullBool)
 		case batchimagejob.FieldEstimatedCost, batchimagejob.FieldHoldAmount, batchimagejob.FieldActualCost:
 			values[i] = new(sql.NullFloat64)
@@ -144,6 +152,20 @@ func (_m *BatchImageJob) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field id", value)
 			}
 			_m.ID = int64(value.Int64)
+		case batchimagejob.FieldResellerSnapshot:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field reseller_snapshot", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.ResellerSnapshot); err != nil {
+					return fmt.Errorf("unmarshal field reseller_snapshot: %w", err)
+				}
+			}
+		case batchimagejob.FieldTeamWallet:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field team_wallet", values[i])
+			} else if value.Valid {
+				_m.TeamWallet = value.Bool
+			}
 		case batchimagejob.FieldBatchID:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field batch_id", values[i])
@@ -470,6 +492,12 @@ func (_m *BatchImageJob) String() string {
 	var builder strings.Builder
 	builder.WriteString("BatchImageJob(")
 	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
+	builder.WriteString("reseller_snapshot=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ResellerSnapshot))
+	builder.WriteString(", ")
+	builder.WriteString("team_wallet=")
+	builder.WriteString(fmt.Sprintf("%v", _m.TeamWallet))
+	builder.WriteString(", ")
 	builder.WriteString("batch_id=")
 	builder.WriteString(_m.BatchID)
 	builder.WriteString(", ")

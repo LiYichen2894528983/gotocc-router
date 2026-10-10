@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package service
 
 import (
@@ -268,7 +270,7 @@ func TestOpenAIGatewayService_OAuthMessagesBridgeDoesNotInjectDefaultInstruction
 	require.True(t, ok)
 	require.Equal(t, cacheIdentity, alignedIdentity.Identity)
 	require.Equal(t, cacheIdentity, upstream.lastReq.Header.Get(codexSessionIDHeader))
-	require.Equal(t, cacheIdentity, upstream.lastReq.Header.Get("session_id"))
+	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("x-codex-installation-id"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("thread-id"))
 	require.Equal(t, upstream.lastReq.Header.Get("thread-id"), upstream.lastReq.Header.Get("x-client-request-id"))
@@ -520,7 +522,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_GroupForceOpenAIFastInjectsMissin
 	require.Equal(t, OpenAIFastTierPriority, *result.ServiceTier)
 }
 
-// 「自动透传（仅替换认证）」的默认行为必须真的只替换认证：namespace 声明、
+// HTTP 自动透传仍由网关管理认证与出站身份；正文中的 namespace 声明、
 // namespace 形态的 tool_choice、历史调用项上的 namespace 都原样转发，只清掉
 // 非调用项上的残留 namespace（Codex 协议里只有调用项会带该字段）。
 func TestOpenAIGatewayService_OAuthPassthrough_PreservesNamespaceRequest(t *testing.T) {
@@ -855,8 +857,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	require.Equal(t, "local-test-instructions", strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
-	require.NotEmpty(t, upstream.lastReq.Header.Get("Session_Id"))
-	require.NotEqual(t, resolveConvergedSessionID(account), upstream.lastReq.Header.Get("Session_Id"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("Session-Id"))
+	require.Empty(t, upstream.lastReq.Header.Get("Session_Id"))
 	require.Equal(t, "owner-installation", upstream.lastReq.Header.Get("x-codex-installation-id"))
 	require.Equal(t, "owner-installation", gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-installation-id").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata.session_id").Exists())
@@ -916,7 +918,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NativeCompactUsesFullModeAndPlusC
 	require.NotEmpty(t, cacheIdentity)
 	require.NotEqual(t, "native-client-cache", cacheIdentity)
 	require.Equal(t, cacheIdentity, upstream.lastReq.Header.Get("session-id"))
-	require.Equal(t, cacheIdentity, upstream.lastReq.Header.Get("session_id"))
+	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Equal(t, "native-owner-installation", upstream.lastReq.Header.Get("x-codex-installation-id"))
 	require.Equal(t, "native-owner-installation", gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-installation-id").String())
 	require.Equal(t, resolveConvergedSessionID(account), gjson.GetBytes(upstream.lastBody, "client_metadata.session_id").String())
@@ -1018,6 +1020,44 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefau
 			require.Equal(t, strings.TrimSpace(defaultCodexSynthInstructions("gpt-5.1-codex-max")), strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
 		})
 	}
+}
+
+func TestOpenAIGatewayService_Forward_MissingInstructionsUsesMappedModelTemplate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_mapped_astra"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+			"", "data: [DONE]", "",
+		}, "\n"))),
+	}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+			"model_mapping":      map[string]any{"astra-public": "gpt-6-astra"},
+		},
+		Extra: map[string]any{
+			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff,
+		},
+		Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"astra-public","stream":true,"store":true,"input":[{"type":"text","text":"hi"}]}`))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.lastBody, "model").String())
+	instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
+	require.True(t, strings.HasPrefix(strings.TrimSpace(instructions), "You are Codex, an agent based on GPT-6."))
+	require.NotContains(t, instructions, "You are Codex, a coding agent based on GPT-5.")
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *testing.T) {

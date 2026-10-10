@@ -82,6 +82,7 @@ func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
 }
 
 func provideCleanup(
+	channelMonitorV3 *service.ChannelMonitorV3Service,
 	entClient *ent.Client,
 	rdb *redis.Client,
 	opsMetricsCollector *service.OpsMetricsCollector,
@@ -116,6 +117,7 @@ func provideCleanup(
 	geminiOAuth *service.GeminiOAuthService,
 	antigravityOAuth *service.AntigravityOAuthService,
 	grokOAuth *service.GrokOAuthService,
+	zhipuOffPeakTickets *service.ZhipuOffPeakTicketManager,
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	backupSvc *service.BackupService,
@@ -127,6 +129,7 @@ func provideCleanup(
 	usageAlert *service.UsageAlertService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
+	openAIGroupQuotaFollowReset *service.OpenAIGroupQuotaFollowResetService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
@@ -141,9 +144,27 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"OpenAIGroupQuotaFollowResetService", func() error {
+				if openAIGroupQuotaFollowReset != nil {
+					openAIGroupQuotaFollowReset.Stop()
+				}
+				return nil
+			}},
+			{"ZhipuOffPeakTicketManager", func() error {
+				if zhipuOffPeakTickets != nil {
+					zhipuOffPeakTickets.Stop()
+				}
+				return nil
+			}},
 			{"PluginManager", func() error {
 				if pluginManager != nil {
 					pluginManager.Stop()
+				}
+				return nil
+			}},
+			{"ChannelMonitorV3Service", func() error {
+				if channelMonitorV3 != nil {
+					channelMonitorV3.Stop()
 				}
 				return nil
 			}},

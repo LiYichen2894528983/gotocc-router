@@ -6,6 +6,7 @@ import (
 
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/brandidentity"
 	infraerrors "github.com/LuckyKuang/sub2api-plus/internal/pkg/errors"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
 
 	"golang.org/x/net/http/httpguts"
 )
@@ -29,47 +30,74 @@ const (
 //   - content-type：承载报文框架信息（multipart boundary 为每请求随机值），静态覆写必然与 body 不匹配；
 //   - authorization/x-api-key/cookie 等：上游认证头由账号凭据统一注入，禁止通过覆写篡改或重新引入；
 //   - accept-encoding：强制压缩会破坏网关对上游流式响应（SSE/usage）的解析；
+//   - content-encoding：请求体编码由网关的协商压缩层独占，静态覆写会宣告与
+//     实际 body 不符的编码（Grok 请求压缩）；
 //   - sec-websocket-*：WebSocket 握手头由拨号器管理（OpenAI WS 模式）；
 //   - session-id/session_id/thread-id/x-client-request-id 等：逐请求会话隔离头，
-//     固定值会造成会话串扰。
+//     固定值会造成会话串扰；
+//   - x-openai-subagent/x-openai-memgen-request/x-responsesapi-include-timing-metrics：
+//     官方 Codex 客户端逐回合上下文头，必须反映客户端真实状态，
+//     静态覆写会破坏官方协议语义。
 var headerOverrideBlockedNames = map[string]struct{}{
-	"host":                     {},
-	"content-length":           {},
-	"content-type":             {},
-	"transfer-encoding":        {},
-	"connection":               {},
-	"keep-alive":               {},
-	"proxy-authenticate":       {},
-	"proxy-authorization":      {},
-	"proxy-connection":         {},
-	"te":                       {},
-	"trailer":                  {},
-	"upgrade":                  {},
-	"authorization":            {},
-	"x-api-key":                {},
-	"x-goog-api-key":           {},
-	"cookie":                   {},
-	"accept-encoding":          {},
-	"sec-websocket-key":        {},
-	"sec-websocket-version":    {},
-	"sec-websocket-extensions": {},
-	"sec-websocket-protocol":   {},
-	"sec-websocket-accept":     {},
-	"session-id":               {},
-	"session_id":               {},
-	"thread-id":                {},
-	"conversation_id":          {},
-	"x-codex-turn-state":       {},
-	"x-codex-turn-metadata":    {},
-	"chatgpt-account-id":       {},
-	"x-claude-code-session-id": {},
-	"x-client-request-id":      {},
-	"x-grok-conv-id":           {},
+	"host":                                  {},
+	"content-length":                        {},
+	"content-type":                          {},
+	"transfer-encoding":                     {},
+	"connection":                            {},
+	"keep-alive":                            {},
+	"proxy-authenticate":                    {},
+	"proxy-authorization":                   {},
+	"proxy-connection":                      {},
+	"te":                                    {},
+	"trailer":                               {},
+	"upgrade":                               {},
+	"authorization":                         {},
+	"x-dsh-auth-token":                      {},
+	"x-api-key":                             {},
+	"x-goog-api-key":                        {},
+	"cookie":                                {},
+	"accept-encoding":                       {},
+	"content-encoding":                      {},
+	"sec-websocket-key":                     {},
+	"sec-websocket-version":                 {},
+	"sec-websocket-extensions":              {},
+	"sec-websocket-protocol":                {},
+	"sec-websocket-accept":                  {},
+	"session-id":                            {},
+	"session_id":                            {},
+	"thread-id":                             {},
+	"conversation_id":                       {},
+	"x-codex-turn-state":                    {},
+	"x-codex-turn-metadata":                 {},
+	"chatgpt-account-id":                    {},
+	"x-claude-code-session-id":              {},
+	"x-client-request-id":                   {},
+	"x-grok-conv-id":                        {},
+	"x-grok-client-mode":                    {},
+	"x-grok-client-surface":                 {},
+	"x-grok-req-id":                         {},
+	"x-grok-session-id":                     {},
+	"x-grok-agent-id":                       {},
+	"x-grok-conv-group-id":                  {},
+	"x-grok-model-override":                 {},
+	"x-grok-user-id":                        {},
+	"x-grok-deployment-id":                  {},
+	"x-grok-turn-idx":                       {},
+	"x-grok-transient-retry":                {},
+	"x-userid":                              {},
+	"x-email":                               {},
+	"x-xai-token-auth":                      {},
+	"x-authenticateresponse":                {},
+	"x-openai-internal-codex-residency":     {},
+	"x-openai-memgen-request":               {},
+	"x-openai-subagent":                     {},
+	"x-responsesapi-include-timing-metrics": {},
 }
 
 func isHeaderOverrideBlockedName(lowerName string) bool {
 	_, blocked := headerOverrideBlockedNames[lowerName]
-	return blocked
+	// The same guard protects new saves and legacy stored overrides at runtime.
+	return blocked || outboundidentity.IsIdentityHeader(lowerName)
 }
 
 // IsHeaderOverrideEligible 报告账号类型是否支持请求头覆写。
@@ -81,7 +109,7 @@ func (a *Account) IsHeaderOverrideEligible() bool {
 		return false
 	}
 	switch a.Platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformAnthropic, PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformStepFun, PlatformOpenCodeGo:
 		return a.Type == AccountTypeAPIKey
 	case PlatformGrok:
 		return a.Type == AccountTypeAPIKey || a.Type == AccountTypeOAuth
@@ -285,9 +313,12 @@ func normalizeHeaderOverrideEntry(name, value string) (string, string, error) {
 		return "", "", infraerrors.Newf(http.StatusBadRequest, "INVALID_HEADER_OVERRIDE",
 			"header %q is not allowed to be overridden", lowerName)
 	}
-	if brandidentity.IsReservedHeaderName(lowerName) || brandidentity.IsLocalControlHeaderName(lowerName) {
+	if brandidentity.IsReservedHeaderName(lowerName) {
 		return "", "", infraerrors.New(http.StatusBadRequest, "INVALID_HEADER_OVERRIDE",
 			"header name uses a reserved protocol identifier")
+	}
+	if brandidentity.ContainsBrand(value) {
+		return "", "", infraerrors.BadRequest("INVALID_HEADER_OVERRIDE", "header value must not contain the project identifier")
 	}
 	if len(value) > maxHeaderOverrideValueLength {
 		return "", "", infraerrors.Newf(http.StatusBadRequest, "INVALID_HEADER_OVERRIDE",

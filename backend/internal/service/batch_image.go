@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/reseller"
 	"net/http"
 	"time"
 
@@ -99,6 +100,8 @@ var (
 )
 
 type BatchImageJob struct {
+	TeamWallet        bool
+	ResellerSnapshot  *reseller.Snapshot `json:"-"`
 	GroupID           *int64
 	ID                int64
 	BatchID           string
@@ -164,6 +167,8 @@ type BatchImageJob struct {
 }
 
 type CreateBatchImageJobParams struct {
+	TeamWallet        bool
+	ResellerSnapshot  *reseller.Snapshot `json:"-"`
 	GroupID           *int64
 	BatchID           string
 	UserID            int64

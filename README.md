@@ -4,7 +4,7 @@
 
 # Sub2API Plus
 
-[![CI](https://github.com/skyqingname/gotocc-router/actions/workflows/backend-ci.yml/badge.svg)](https://github.com/skyqingname/gotocc-router/actions/workflows/backend-ci.yml)
+[![CI](https://github.com/skyqingname/gotocc-router/actions/workflows/ci.yml/badge.svg)](https://github.com/skyqingname/gotocc-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-LGPL--3.0--or--later-blue.svg)](LICENSE)
 
 **AI API gateway for subscription quota distribution**
@@ -72,15 +72,13 @@ usable; replace its immutable tag with another value returned by
 `list-versions` when needed:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- install --version 'v0.2.0+custom.004'
+curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- install --version 'v0.2.14+custom.002'
 ```
 
 Roll back an existing binary installation to an earlier published version:
 
-This inherited rollback example illustrates command syntax. Choose an available, database-compatible release from the owned repository before running it.
-
 ```bash
-curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- rollback 'v0.1.183+custom.004'
+curl -sSL https://raw.githubusercontent.com/skyqingname/gotocc-router/main/deploy/install.sh | sudo bash -s -- rollback 'v0.2.14+custom.001'
 ```
 
 Remove the service and binary while preserving `/etc/sub2api`:
@@ -145,7 +143,7 @@ The full example configuration is
 [`deploy/config.example.yaml`](deploy/config.example.yaml).
 
 <!-- readme-section:providers -->
-<!-- readme-capabilities:openai,anthropic,gemini,antigravity,grok,async-images,sora-unavailable -->
+<!-- readme-capabilities:openai,anthropic,gemini,antigravity,grok,typesafe,async-images,sora-unavailable -->
 ## Provider Support
 
 | Provider or capability | Notes |
@@ -155,6 +153,7 @@ The full example configuration is
 | Google Gemini | Gemini-compatible traffic and supported OAuth/API-key accounts |
 | Antigravity | Dedicated and optional hybrid Claude/Gemini routing |
 | Grok / xAI | OAuth subscription and API-key accounts |
+| TypeSafe / Jev | API-key accounts for Jev's native non-streaming System One protocol: `POST /v1/systemone`, model `jev-latest`, `noul`/`choice`/`score` questions, built-in `$0.042`/M input and `$0` output pricing; other gateway protocols return `404` |
 | Asynchronous images | Submit and poll long-running image generation/edit tasks |
 | Sora | Temporarily unavailable; do not depend on it in production |
 
@@ -162,6 +161,8 @@ Details:
 
 - [Grok / xAI](docs/providers/GROK.md)
 - [Antigravity](docs/providers/ANTIGRAVITY.md)
+- [DeepSeek](docs/providers/DEEPSEEK.md)
+- [TypeSafe / Jev](docs/providers/TYPESAFE.md)
 - [Sora status](docs/providers/SORA.md)
 - [OpenAI Responses and WebSocket ingress](docs/protocols/OPENAI_RESPONSES.md)
 - [Asynchronous image tasks](docs/ASYNC_IMAGE_TASKS.md)

@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package handler
 
 import (
@@ -219,10 +221,8 @@ func TestRunSecurityAuditExcludesHarnessAcrossHTTPAndWebSocketStages(t *testing.
 			require.NotNil(t, decision)
 			require.True(t, decision.AllowNextStage)
 			require.Contains(t, engine.capturedScanText(), "hi")
-			if test.mode == securityaudit.ModeAsync {
-				require.Contains(t, engine.capturedScanText(), "You are Codex")
-				require.Contains(t, engine.capturedScanText(), "Run JavaScript in the sandbox")
-			}
+			require.NotContains(t, engine.capturedScanText(), "You are Codex")
+			require.NotContains(t, engine.capturedScanText(), "Run JavaScript in the sandbox")
 		})
 	}
 }
@@ -314,60 +314,67 @@ func (s blockingCompatibilityConfigStore) Decrypt(value string) (string, error) 
 
 func TestExtractionFailuresAllowAPIKeyAndOAuthDownstreamStages(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
-		t.Run(accountType, func(t *testing.T) {
-			account := &service.Account{
-				ID: 11, Platform: service.PlatformOpenAI, Type: accountType,
-				Credentials: map[string]any{
-					"api_key":      "api-key-credential",
-					"access_token": "oauth-access-token",
-				},
-			}
-			metrics := securityaudit.NewAtomicMetrics()
-			prompt := securityaudit.NewPromptService(blockingCompatibilityConfigStore{cfg: securityaudit.ActiveConfig{
-				RiskControlEnabled: true, Enabled: true, BlockingEnabled: true, AllGroups: true,
-				Scanners: []string{"pii"}, Endpoints: []securityaudit.ActiveEndpoint{{ID: "guard", Enabled: true, TimeoutMS: 1000, InputLimit: 4096}},
-			}}, nil, nil, nil, metrics)
-			coordinator := securityaudit.NewCoordinator(nil, prompt)
-			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-			groupID := int64(3)
-			apiKey := &service.APIKey{ID: 9, UserID: 7, GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI}}
-			decision := runSecurityAudit(
-				c, nil, coordinator, nil, apiKey, middleware2.AuthSubject{UserID: 7, Concurrency: 2},
-				service.ContentModerationProtocolOpenAIResponses, "gpt-test",
-				[]byte(`{"type":"future.client.event","payload":"unrecognized content"}`), "http",
-			)
-			require.NotNil(t, decision)
-			require.Equal(t, securityaudit.DecisionAllow, decision.Kind)
-			require.True(t, decision.AllowNextStage)
-
-			accountSelections, billingChecks, concurrencyAcquisitions, upstreamDispatches := 0, 0, 0, 0
-			selectedCredential := ""
-			if decision.AllowNextStage {
-				accountSelections++
-				if account.IsOpenAIOAuth() {
-					selectedCredential = account.GetOpenAIAccessToken()
-				} else {
-					selectedCredential = account.GetOpenAIProtocolAPIKey()
+	for _, platform := range []string{service.PlatformOpenAI, service.PlatformDeepseek, service.PlatformKimi, service.PlatformMiniMax, service.PlatformZhipu, service.PlatformStepFun} {
+		for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+			t.Run(platform+"/"+accountType, func(t *testing.T) {
+				account := &service.Account{
+					ID: 11, Platform: platform, Type: accountType,
+					Credentials: map[string]any{
+						"api_key":        "api-key-credential",
+						"oauth_provider": platform,
+						"access_token":   "oauth-access-token",
+					},
 				}
-				billingChecks++
-				concurrencyAcquisitions++
-				upstreamDispatches++
-			}
-			require.Equal(t, 1, accountSelections, accountType)
-			require.Equal(t, 1, billingChecks, accountType)
-			require.Equal(t, 1, concurrencyAcquisitions, accountType)
-			require.Equal(t, 1, upstreamDispatches, accountType)
-			if accountType == service.AccountTypeOAuth {
-				require.Equal(t, "oauth-access-token", selectedCredential)
-			} else {
-				require.Equal(t, "api-key-credential", selectedCredential)
-			}
-			require.Equal(t, securityaudit.AuditMetricsSnapshot{ExtractionAttempted: 1, ExtractionFailed: 1}, metrics.AuditSnapshot())
-		})
+				if platform == service.PlatformZhipu {
+					account.Credentials["oauth_provider"] = "bigmodel"
+				}
+				metrics := securityaudit.NewAtomicMetrics()
+				prompt := securityaudit.NewPromptService(blockingCompatibilityConfigStore{cfg: securityaudit.ActiveConfig{
+					RiskControlEnabled: true, Enabled: true, BlockingEnabled: true, AllGroups: true,
+					Scanners: []string{"pii"}, Endpoints: []securityaudit.ActiveEndpoint{{ID: "guard", Enabled: true, TimeoutMS: 1000, InputLimit: 4096}},
+				}}, nil, nil, nil, metrics)
+				coordinator := securityaudit.NewCoordinator(nil, prompt)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				groupID := int64(3)
+				apiKey := &service.APIKey{ID: 9, UserID: 7, GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: platform}}
+				decision := runSecurityAudit(
+					c, nil, coordinator, nil, apiKey, middleware2.AuthSubject{UserID: 7, Concurrency: 2},
+					service.ContentModerationProtocolOpenAIResponses, "gpt-test",
+					[]byte(`{"type":"future.client.event","payload":"unrecognized content"}`), "http",
+				)
+				require.NotNil(t, decision)
+				require.Equal(t, securityaudit.DecisionAllow, decision.Kind)
+				require.True(t, decision.AllowNextStage)
+
+				accountSelections, billingChecks, concurrencyAcquisitions, upstreamDispatches := 0, 0, 0, 0
+				selectedCredential := ""
+				if decision.AllowNextStage {
+					accountSelections++
+					if account.IsOpenAIOAuth() {
+						selectedCredential = account.GetOpenAIAccessToken()
+					} else {
+						selectedCredential = account.GetOpenAIProtocolAPIKey()
+					}
+					billingChecks++
+					concurrencyAcquisitions++
+					upstreamDispatches++
+				}
+				require.Equal(t, 1, accountSelections, accountType)
+				require.Equal(t, 1, billingChecks, accountType)
+				require.Equal(t, 1, concurrencyAcquisitions, accountType)
+				require.Equal(t, 1, upstreamDispatches, accountType)
+				if accountType == service.AccountTypeOAuth && platform != service.PlatformZhipu {
+					require.Equal(t, "oauth-access-token", selectedCredential)
+				} else {
+					require.Equal(t, "api-key-credential", selectedCredential)
+				}
+				require.Equal(t, securityaudit.AuditMetricsSnapshot{ExtractionAttempted: 1, ExtractionFailed: 1}, metrics.AuditSnapshot())
+			})
+		}
 	}
+
 }
 
 type turnCountingEngine struct {
@@ -392,7 +399,7 @@ func (e *turnCountingEngine) Enqueue(_ context.Context, req securityaudit.Reques
 func (e *turnCountingEngine) Evaluate(_ context.Context, req securityaudit.Request) (*securityaudit.PromptDecision, error) {
 	call := e.evaluates.Add(1)
 	if e.captureSnapshot {
-		if snapshot, err := securityaudit.ExtractBlockingPromptSnapshot(req, true); err == nil {
+		if snapshot, err := securityaudit.ExtractPromptSnapshot(req); err == nil {
 			e.lastScanText.Store(snapshot.ScanText)
 		}
 	}

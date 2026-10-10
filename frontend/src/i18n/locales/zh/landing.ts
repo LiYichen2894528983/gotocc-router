@@ -206,6 +206,7 @@ export default {
     usedQuota: '已用额度',
     resetNow: '即将重置',
     subscriptionType: '订阅类型',
+    billingType: '计费方式',
     subscriptionExpires: '订阅到期',
     // Usage stat cells
     todayRequests: '今日请求',
@@ -272,7 +273,8 @@ export default {
       email: '邮箱',
       password: '密码',
       confirmPassword: '确认密码',
-      passwordPlaceholder: '至少 8 个字符',
+      passwordPlaceholder: '8–72 字节（UTF-8）',
+      passwordLengthError: '密码必须为 8–72 个 UTF-8 字节，中文等字符可能占用多个字节。',
       confirmPasswordPlaceholder: '确认密码',
       passwordMismatch: '密码不匹配'
     },

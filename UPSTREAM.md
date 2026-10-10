@@ -1,9 +1,50 @@
 # Upstream Mapping
 
-This file maps custom releases to their official Sub2API baseline. Historical
-rows are inherited metadata; feature imports preserve their recorded status.
-Owned release publication is verified and finalized in a separate metadata PR.
-Release procedures are documented in [`docs/RELEASING.md`](docs/RELEASING.md).
+This file is the authoritative mapping of Plus tags to official baselines and
+publication status. Release naming and procedures live in
+[RELEASING.md](docs/RELEASING.md).
+
+## Integrated Baseline
+
+The current tree integrates official `v0.2.14`: tag object
+`1400a7b482974d98db5b284a8b2afbe3eaf9aaef`, peeled commit
+`0363b8cdba8cec3e2ba4b2dbd49c4481143fa55d`. The merge base is the previously
+integrated official `v0.2.13` commit
+`3040209f205472038c1ba745a1bedd2edd9053b1`. Importing source does not publish a
+Plus release or change its embedded version.
+
+Preserve intentional Plus behavior during every import. Current contracts live
+in [outbound identity](docs/OUTBOUND_IDENTITY.md),
+[ingress audit](docs/SECURITY_AUDIT_CONTENT_COVERAGE.md),
+[provider/protocol documentation](docs/README.md),
+[pricing](docs/CHANNEL_PRICING.md) and
+[upgrade prerequisites](backend/migrations/README.md#upgrade-prerequisites).
+Completed integration narratives remain in Git history.
+
+## GoToCC candidate
+
+The owned candidate is `0.2.14+custom.004`, based on the published GoToCC
+`0.2.14+custom.003`. It fixes WebSocket admission cancellation, preserves
+session bindings during temporary overflow, and supports old CC Switch usage
+URLs. Its unchanged Plus input is `v0.2.14+custom.002`
+(`a7749f5826ec0a5c6493c47fde9474dc31525f14`). Publication uses the accepted
+local package; it does not deploy production.
+
+## Removed Upstream Paths
+
+GoToCC builds through `tools/gotocc_build.py`, checks pull requests with
+`.github/workflows/ci.yml`, and publishes from the operations workflow. The
+upstream CI, release and validation tooling listed in
+`upstream-removed-paths.json` is not part of this tree; the operations
+`prepare` step removes those paths again after every upstream merge.
+
+## Plus Baseline Version
+
+```text
+Git/GitHub: v0.2.14+custom.004
+Application: 0.2.14+custom.004
+GHCR: ghcr.io/skyqingname/sub2api-plus:v0.2.14-custom.004
+```
 
 ## Release Mapping
 
@@ -51,51 +92,44 @@ Release procedures are documented in [`docs/RELEASING.md`](docs/RELEASING.md).
 | `v0.1.183+custom.002` | `v0.1.183` | `e8cb019fabf8b55199436229044cbf9aa7a82564` | published |
 | `v0.1.183+custom.003` | `v0.1.183` | `e8cb019fabf8b55199436229044cbf9aa7a82564` | published |
 | `v0.1.183+custom.004` | `v0.1.183` | `e8cb019fabf8b55199436229044cbf9aa7a82564` | published |
-| `v0.2.0+custom.001` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | planned |
-| `v0.2.0+custom.002` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | planned |
-| `v0.2.0+custom.003` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | invalid |
-| `v0.2.0+custom.004` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | published |
+| `v0.2.0+custom.001` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | published |
+| `v0.2.0+custom.002` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | published |
+| `v0.2.0+custom.003` | `v0.2.0` | `aa236488351eb71e120fc2b6fb32e36b0374c918` | published |
+| `v0.2.1+custom.001` | `v0.2.1` | `578785ee7fb35030b094b69624efe25670a36f5f` | published |
+| `v0.2.1+custom.002` | `v0.2.1` | `578785ee7fb35030b094b69624efe25670a36f5f` | published |
+| `v0.2.1+custom.003` | `v0.2.1` | `578785ee7fb35030b094b69624efe25670a36f5f` | published |
+| `v0.2.4+custom.001` | `v0.2.4` | `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | published |
+| `v0.2.4+custom.002` | `v0.2.4` | `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | published |
+| `v0.2.4+custom.003` | `v0.2.4` | `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | published |
+| `v0.2.4+custom.004` | `v0.2.4` | `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | published |
+| `v0.2.4+custom.005` | `v0.2.4` | `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | published |
+| `v0.2.4+custom.006` | `v0.2.4` | `badfad8b7248b8aac0e6b503a06e392aa31cb294` | withdrawn |
+| `v0.2.5+custom.001` | `v0.2.5` | `86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea` | published |
+| `v0.2.7+custom.001` | `v0.2.7` | `aea725f2ea644d5592d0bbb1d63b607efa7e200a` | published |
+| `v0.2.8+custom.001` | `v0.2.8` | `fd80b08c90b55edcad5b00171b53f08721d30da1` | published |
+| `v0.2.8+custom.002` | `v0.2.8` | `fd80b08c90b55edcad5b00171b53f08721d30da1` | published |
+| `v0.2.9+custom.001` | `v0.2.9` | `4c00df2e0183e2c70b7fa8ba45914205e36aad0c` | published |
+| `v0.2.10+custom.001` | `v0.2.10` | `2f3fed2fdb0787141294cec81487a5df30426f7f` | published |
+| `v0.2.11+custom.001` | `v0.2.11` | `96f4c115c9749078f90cbf210a01d39baf3f53b6` | published |
+| `v0.2.11+custom.002` | `v0.2.11` | `96f4c115c9749078f90cbf210a01d39baf3f53b6` | published |
+| `v0.2.13+custom.001` | `v0.2.13` | `3040209f205472038c1ba745a1bedd2edd9053b1` | published |
+| `v0.2.14+custom.001` | `v0.2.14` | `0363b8cdba8cec3e2ba4b2dbd49c4481143fa55d` | published |
+| `v0.2.14+custom.002` | `v0.2.14` | `0363b8cdba8cec3e2ba4b2dbd49c4481143fa55d` | planned |
+| `v0.2.14+custom.003` | `v0.2.14` | `0363b8cdba8cec3e2ba4b2dbd49c4481143fa55d` | planned |
+
+`v0.2.4+custom.006` is marked withdrawn because official `v0.2.5` was imported before that snapshot overlay was published. Do not reuse or retag `.006`.
 
 `v0.1.166+custom.007` is marked invalid because its tag contains embedded and
 documented version `0.1.166+custom.006`. Remote Release and OCI artifact status
 still require a maintainer audit. Do not reuse or retag `.007`.
 
-`v0.2.0+custom.003` is invalid as a complete owned distribution: its archives
-were published before the standalone pricing assets, which could not be added
-after immutability took effect. The immutable tag and assets are preserved;
-use the complete `.004` release instead.
+## Repository Roles
 
-## Current Version
+- `origin`: [Sub2API Plus](https://github.com/LuckyKuang/sub2api-plus), the
+  installation, update, rollback and release source.
+- `upstream`: [official Sub2API](https://github.com/Wei-Shaw/sub2api), the source
+  input for imports.
 
-```text
-Git/GitHub: v0.2.0+custom.004
-Application: 0.2.0+custom.004
-GHCR: ghcr.io/skyqingname/sub2api-plus:v0.2.0-custom.004
-```
-
-## Naming
-
-- Git tags and GitHub Releases: `vX.Y.Z+custom.NNN`
-- Embedded application versions: `X.Y.Z+custom.NNN`
-- OCI tags: `vX.Y.Z-custom.NNN`
-- `NNN` is a three-digit iteration from `001` to `999`.
-
-Increment the iteration on the same official baseline and reset it to `001`
-after importing a newer official release.
-
-## Distribution and Repository Roles
-
-- Owned installation, update, rollback, and release links use
-  `skyqingname/gotocc-router`.
-- `LuckyKuang/sub2api-plus` is the reference Plus upstream. The adapted baseline
-  and both repository identities are defined in [`release-channel.json`](release-channel.json).
-- `Wei-Shaw/sub2api` is the official source underlying the mapping above.
-- Upstream releases are inputs for adaptation and update notifications. They
-  are not installation or rollback sources for the owned distribution.
-
-Preserve intentional GotoCC changes during Plus imports and update the adapted
-baseline in the same release-preparation change.
-
-Historical `-custom.NNN` Git naming was migrated to the canonical
-`+custom.NNN` form. OCI tags continue to use `-custom.NNN` because OCI tags do
-not support `+`.
+Update this mapping in the same change as an upstream integration. Keep tag,
+embedded version and OCI naming synchronized through the release workflow;
+published tags and artifacts are immutable.

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LuckyKuang/sub2api-plus/internal/config"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -135,7 +137,7 @@ func TestAccountTestService_TestAccountConnection_GrokUsesXAIResponses(t *testin
 	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer grok-access-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, grokCLIVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.Equal(t, "application/json, text/event-stream", upstream.lastReq.Header.Get("Accept"))
+	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, "grok-4.3", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, grokQuotaProbeInput, gjson.GetBytes(upstream.lastBody, "input").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
@@ -293,6 +295,11 @@ func TestAccountTestService_GrokImageModelUsesImagesGenerations(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "https://api.x.ai/v1/images/generations", upstream.lastReq.URL.String())
+	// Official media_tool_config.rs emits the media family, not sampler metadata.
+	require.Equal(t, "xai-grok-build/1.0.45", upstream.lastReq.UserAgent())
+	for _, header := range []string{"X-Grok-Req-Id", "X-Grok-Agent-Id", "X-Grok-Model-Override", "X-Grok-User-Id", "X-Grok-Client-Mode"} {
+		require.Empty(t, upstream.lastReq.Header.Get(header), header)
+	}
 	require.Equal(t, "grok-imagine-image", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "a red apple", gjson.GetBytes(upstream.lastBody, "prompt").String())
 	require.Equal(t, "b64_json", gjson.GetBytes(upstream.lastBody, "response_format").String())
@@ -497,6 +504,11 @@ func TestAccountTestService_GrokExplicitImageModeDefaultsModel(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "https://api.x.ai/v1/images/generations", upstream.lastReq.URL.String())
+	// Official media_tool_config.rs emits the media family, not sampler metadata.
+	require.Equal(t, "xai-grok-build/1.0.45", upstream.lastReq.UserAgent())
+	for _, header := range []string{"X-Grok-Req-Id", "X-Grok-Agent-Id", "X-Grok-Model-Override", "X-Grok-User-Id", "X-Grok-Client-Mode"} {
+		require.Empty(t, upstream.lastReq.Header.Get(header), header)
+	}
 	require.Equal(t, "grok-imagine-image", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "b64_json", gjson.GetBytes(upstream.lastBody, "response_format").String())
 	require.Contains(t, rec.Body.String(), `"type":"test_complete"`)
@@ -534,6 +546,10 @@ func TestAccountTestService_GrokVideoUpstreamErrorIsNotMaskedAsSuccess(t *testin
 
 	require.Error(t, err)
 	require.Equal(t, "https://api.x.ai/v1/videos/generations", upstream.lastReq.URL.String())
+	require.Equal(t, "xai-grok-build/1.0.45", upstream.lastReq.UserAgent())
+	for _, header := range []string{"X-Grok-Req-Id", "X-Grok-Agent-Id", "X-Grok-Model-Override", "X-Grok-User-Id", "X-Grok-Client-Mode"} {
+		require.Empty(t, upstream.lastReq.Header.Get(header), header)
+	}
 	require.Contains(t, rec.Body.String(), `"type":"error"`)
 	require.Contains(t, rec.Body.String(), "Grok videos API returned 400")
 	require.NotContains(t, rec.Body.String(), `"success":true`)
@@ -554,15 +570,17 @@ func (c *grokRealtimeTestConn) Ping(context.Context) error { return nil }
 func (c *grokRealtimeTestConn) Close() error               { return nil }
 
 type grokRealtimeTestDialer struct {
-	lastURL   string
-	lastAuth  string
-	lastProxy string
-	conn      openAIWSClientConn
-	err       error
-	status    int
+	lastURL     string
+	lastHeaders http.Header
+	lastAuth    string
+	lastProxy   string
+	conn        openAIWSClientConn
+	err         error
+	status      int
 }
 
 func (d *grokRealtimeTestDialer) Dial(_ context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error) {
+	d.lastHeaders = headers.Clone()
 	d.lastURL = wsURL
 	d.lastAuth = headers.Get("Authorization")
 	d.lastProxy = proxyURL
@@ -573,6 +591,28 @@ func (d *grokRealtimeTestDialer) Dial(_ context.Context, wsURL string, headers h
 		d.conn = &grokRealtimeTestConn{}
 	}
 	return d.conn, 0, nil, nil
+}
+
+func TestOutboundIdentityGrokRealtimeProbeAndForward(t *testing.T) {
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		t.Run(accountType, func(t *testing.T) {
+			dialer := &grokRealtimeTestDialer{}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, openaiWSPassthroughDialer: dialer}
+			account := &Account{ID: 42, Platform: PlatformGrok, Type: accountType, Credentials: map[string]any{
+				outboundIdentityCredential:   OutboundIdentitySelection{Preset: "grok", Version: "3.9.1"},
+				credKeyHeaderOverrideEnabled: true, credKeyHeaderOverrides: map[string]any{"user-agent": "untrusted-override", "x-grok-client-version": "9.9.9"},
+			}}
+			require.NoError(t, svc.ProbeGrokRealtime(context.Background(), account, "test-token", "grok-voice-latest"))
+			probeHeaders := dialer.lastHeaders.Clone()
+			upstream, err := svc.OpenGrokRealtime(context.Background(), account, "test-token", "grok-voice-latest")
+			require.NoError(t, err)
+			require.NoError(t, upstream.Close())
+			require.Equal(t, probeHeaders, dialer.lastHeaders)
+			require.Equal(t, xai.CLIUserAgent("3.9.1"), dialer.lastHeaders.Get("User-Agent"))
+			require.Equal(t, "3.9.1", dialer.lastHeaders.Get("X-Grok-Client-Version"))
+			require.Equal(t, "Bearer test-token", dialer.lastHeaders.Get("Authorization"))
+		})
+	}
 }
 
 func TestAccountTestService_GrokRealtimeModeDialsWS(t *testing.T) {

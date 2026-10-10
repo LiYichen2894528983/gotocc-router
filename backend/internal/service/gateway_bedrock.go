@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/logger"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,6 +25,9 @@ import (
 func (s *GatewayService) ApplyBedrockCCCompat(c *gin.Context, body []byte, model string, account *Account, groupID *int64) []byte {
 	if !s.isBedrockCCCompatEnabled(c.Request.Context(), account, groupID) {
 		return body
+	}
+	if resolved, ok := ResolveBedrockModelID(account, model); ok {
+		model = resolved
 	}
 	body = sanitizeBedrockCCFields(body)
 	body = sanitizeBedrockThinking(body, model)
@@ -60,6 +64,7 @@ func (s *GatewayService) forwardBedrock(
 	parsed *ParsedRequest,
 	startTime time.Time,
 ) (*ForwardResult, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	reqModel := parsed.Model
 	reqStream := parsed.Stream
 	body := parsed.Body.Bytes()
@@ -166,6 +171,7 @@ func (s *GatewayService) forwardBedrock(
 
 	return &ForwardResult{
 		RequestID:        resp.Header.Get("x-amzn-requestid"),
+		UpstreamHeaders:  resp.Header,
 		Usage:            *usage,
 		Model:            reqModel,
 		UpstreamModel:    mappedModel,
@@ -206,7 +212,7 @@ func (s *GatewayService) executeBedrockUpstream(
 			return nil, err
 		}
 
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
+		resp, err = s.httpUpstream.DoWithTLS(prepareAccountOutboundRequest(upstreamReq, account), proxyURL, account.ID, account.Concurrency, nil)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -235,6 +241,8 @@ func (s *GatewayService) executeBedrockUpstream(
 				respBody, _ := s.readUpstreamErrorBody(resp)
 				_ = resp.Body.Close()
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -286,6 +294,8 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 
 			s.handleRetryExhaustedSideEffects(ctx, resp, account)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -310,6 +320,8 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 
 		s.handleFailoverSideEffects(ctx, resp, account)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -347,6 +359,7 @@ func (s *GatewayService) buildUpstreamRequestBedrock(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	outboundidentity.ApplyContext(req)
 	// SigV4 签名
 	if err := signer.SignRequest(ctx, req, body); err != nil {
 		return nil, fmt.Errorf("sign bedrock request: %w", err)
@@ -374,6 +387,7 @@ func (s *GatewayService) buildUpstreamRequestBedrockAPIKey(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	outboundidentity.ApplyContext(req)
 
 	return req, nil
 }

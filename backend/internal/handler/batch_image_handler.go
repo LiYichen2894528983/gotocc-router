@@ -182,7 +182,26 @@ func (h *BatchImageHandler) Models(c *gin.Context) {
 		batchImageError(c, err)
 		return
 	}
+	// 分组级模型白名单：ListModels 已按分组账号枚举，这里再按白名单过滤一次。
+	if apiKey, ok := middleware.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil {
+		got.Data = filterBatchImageModelsByAllowlist(got.Data, apiKey.Group.ModelAllowlist)
+	}
 	c.JSON(http.StatusOK, got)
+}
+
+// filterBatchImageModelsByAllowlist 按分组模型白名单过滤批量生图模型列表。
+// 白名单未开启时原样返回。
+func filterBatchImageModelsByAllowlist(models []service.BatchImagePublicModel, allowlist service.GroupModelAllowlist) []service.BatchImagePublicModel {
+	if !allowlist.Enabled {
+		return models
+	}
+	filtered := make([]service.BatchImagePublicModel, 0, len(models))
+	for _, model := range models {
+		if allowlist.Allows(model.ID) {
+			filtered = append(filtered, model)
+		}
+	}
+	return filtered
 }
 
 func (h *BatchImageHandler) Items(c *gin.Context) {
@@ -242,7 +261,11 @@ func (h *BatchImageHandler) ItemContent(c *gin.Context) {
 
 	c.Header("Content-Type", stream.ContentType)
 	c.Header("Content-Disposition", service.BatchImageContentDispositionAttachment(stream.Filename))
-	c.Header("Cache-Control", "private, max-age=300")
+	if _, supportRead := middleware.GetSupportReadTarget(c); supportRead {
+		c.Header("Cache-Control", "private, no-store")
+	} else {
+		c.Header("Cache-Control", "private, max-age=300")
+	}
 	c.Header("X-Content-Type-Options", "nosniff")
 	if stream.ContentLength != nil && *stream.ContentLength >= 0 {
 		c.Header("Content-Length", strconv.FormatInt(*stream.ContentLength, 10))
@@ -257,6 +280,9 @@ func (h *BatchImageHandler) ItemContent(c *gin.Context) {
 // markDownloadedBestEffort 在响应体已写出后标记下载状态；
 // 此时无法再向客户端返回错误，失败只能记日志（不能静默丢弃）。
 func (h *BatchImageHandler) markDownloadedBestEffort(c *gin.Context, owner service.BatchImageOwner) {
+	if _, supportRead := middleware.GetSupportReadTarget(c); supportRead {
+		return
+	}
 	if err := h.service.MarkDownloaded(c.Request.Context(), owner, c.Param("id")); err != nil {
 		logger.L().Warn("batch_image.mark_downloaded_failed",
 			zap.String("batch_id", c.Param("id")),

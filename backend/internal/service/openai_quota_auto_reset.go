@@ -27,6 +27,13 @@ const (
 	openAIAutoResetQueueCapacity = 1024
 	openAIAutoResetAttemptTTL    = 8 * 24 * time.Hour
 	openAIAutoResetLeaderLockKey = "jobs:openai-auto-reset-credit"
+	// 查询阶段失败后的最短重试间隔。调度热路径和扫描都会触发评估，不设间隔时上游
+	// 故障期间同一账号会被十几秒重查一次；用卡阶段的失败不受此限，超时后仍立即用
+	// 同一幂等键重试。
+	openAIAutoResetQueryFailureRetryAfter = time.Minute
+	// 调度热路径每次过滤候选都会评估暂停，对同一账号的通知按此冷却合并；
+	// 后台每分钟全量扫描兜底，冷却不会让账号漏检。
+	openAIAutoResetSchedulerNotifyCooldown = 30 * time.Second
 )
 
 const (
@@ -288,9 +295,15 @@ func (s *OpenAIQuotaAutoResetService) evaluateAccount(ctx context.Context, accou
 	now := time.Now()
 	assessment := s.assessExtra(account, config, now)
 	state := openAIAutoResetStateFromExtra(account.Extra)
-	needsQuery := openAIAutoResetSnapshotStale(account.Extra, now) || assessment.resetReached
+	// 达到用卡阈值本应立即查询以便用卡；但 10 分钟内已确认无卡时，重查不会改变结论，
+	// 只会让调度热路径的通知把同一账号的上游额度接口打到十几秒一次。
+	needsQuery := openAIAutoResetSnapshotStale(account.Extra, now) ||
+		(assessment.resetReached && !openAIAutoResetNoCreditConfirmed(state, now))
 	if assessment.pauseReached && !assessment.resetReached {
 		needsQuery = needsQuery || state == nil || state.Status == OpenAIAutoResetStatusChecking || state.Status == OpenAIAutoResetStatusFailed || openAIAutoResetStateStale(state, now)
+	}
+	if needsQuery && openAIAutoResetQueryFailureBackoffActive(state, now) {
+		needsQuery = false
 	}
 	if !needsQuery {
 		if !assessment.pauseReached && state != nil && state.TriggerWindow != "" {
@@ -554,34 +567,56 @@ func joinOpenAIAutoResetWindows(fiveHour, sevenDay bool) string {
 }
 
 func buildOpenAIAutoResetUsageUpdates(usage *OpenAIQuotaUsage, now time.Time) map[string]any {
+	return buildCodexUsageExtraUpdates(openAIQuotaUsageSnapshot(usage, now), now)
+}
+
+func openAIQuotaUsageSnapshot(usage *OpenAIQuotaUsage, now time.Time) *OpenAICodexUsageSnapshot {
 	if usage == nil || usage.RateLimit == nil {
 		return nil
 	}
 	rateLimit := usage.RateLimit
-	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: now.UTC().Format(time.RFC3339)}
+	if !usage.weeklyObservedAt.IsZero() {
+		now = usage.weeklyObservedAt
+	} else if usage.FetchedAt > 0 {
+		now = time.Unix(usage.FetchedAt, 0)
+	}
+	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: now.UTC().Format(time.RFC3339Nano)}
 	applyWindow := func(window *OpenAIRateLimitWindow, primary bool) {
 		if window == nil {
 			return
 		}
 		used := window.UsedPercent
 		resetAfter := int(window.ResetAfterSeconds)
+		if validOpenAIQuotaResetUnix(window.ResetAt) {
+			resetAfter = max(0, int(time.Unix(window.ResetAt, 0).Sub(now).Seconds()))
+		}
 		windowMinutes := int(window.LimitWindowSeconds / 60)
+		if window.LimitWindowSeconds%60 != 0 {
+			windowMinutes = 0
+		}
 		if primary {
-			snapshot.PrimaryUsedPercent = &used
+			if !window.missingUsedPercent {
+				snapshot.PrimaryUsedPercent = &used
+			}
 			snapshot.PrimaryResetAfterSeconds = &resetAfter
 			snapshot.PrimaryWindowMinutes = &windowMinutes
+			snapshot.PrimaryResetAtUnix = &window.ResetAt
 		} else {
-			snapshot.SecondaryUsedPercent = &used
+			if !window.missingUsedPercent {
+				snapshot.SecondaryUsedPercent = &used
+			}
 			snapshot.SecondaryResetAfterSeconds = &resetAfter
 			snapshot.SecondaryWindowMinutes = &windowMinutes
+			snapshot.SecondaryResetAtUnix = &window.ResetAt
 		}
 	}
 	applyWindow(rateLimit.PrimaryWindow, true)
 	applyWindow(rateLimit.SecondaryWindow, false)
-	return buildCodexUsageExtraUpdates(snapshot, now)
+	return snapshot
 }
 
 func (s *OpenAIQuotaAutoResetService) persistFreshUsage(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage, now time.Time) error {
+	observeOpenAIWeeklyUsageSnapshot(ctx, accountID, openAIQuotaUsageSnapshot(usage, now), false)
 	updates := buildOpenAIAutoResetUsageUpdates(usage, now)
 	if len(updates) > 0 {
 		if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
@@ -688,6 +723,30 @@ func openAIAutoResetStateFromExtra(extra map[string]any) *OpenAIAutoResetCreditS
 		return nil
 	}
 	return &state
+}
+
+// openAIAutoResetNoCreditConfirmed 报告账号在状态有效期内已被确认无卡。
+func openAIAutoResetNoCreditConfirmed(state *OpenAIAutoResetCreditState, now time.Time) bool {
+	return state != nil && state.Status == OpenAIAutoResetStatusNoCredit && !openAIAutoResetStateStale(state, now)
+}
+
+// openAIAutoResetQueryFailureBackoffActive 报告查询阶段刚失败、仍在重试间隔内。
+// 只覆盖查询、快照写入、卡明细缺失三类失败；用卡阶段的失败需要立即按原幂等键重试。
+func openAIAutoResetQueryFailureBackoffActive(state *OpenAIAutoResetCreditState, now time.Time) bool {
+	if state == nil || state.Status != OpenAIAutoResetStatusFailed {
+		return false
+	}
+	switch state.ErrorCode {
+	case "RESET_CREDIT_QUERY_FAILED", "USAGE_SNAPSHOT_WRITE_FAILED", "RESET_CREDIT_DETAILS_UNAVAILABLE":
+	default:
+		return false
+	}
+	failedAt, err := time.Parse(time.RFC3339, state.LastResultAt)
+	if err != nil {
+		return false
+	}
+	elapsed := now.Sub(failedAt)
+	return elapsed >= 0 && elapsed < openAIAutoResetQueryFailureRetryAfter
 }
 
 func openAIAutoResetStateStale(state *OpenAIAutoResetCreditState, now time.Time) bool {
@@ -807,4 +866,30 @@ func notifyOpenAIAutoReset(accountID int64) {
 // NotifyOpenAIAutoResetCredit 供额度查询入口发送轻量信号；不执行同步上游请求。
 func NotifyOpenAIAutoResetCredit(accountID int64) {
 	notifyOpenAIAutoReset(accountID)
+}
+
+// openAIAutoResetSchedulerNotifiedAt 记录调度热路径最近一次为某账号发出通知的时间。
+var openAIAutoResetSchedulerNotifiedAt sync.Map // accountID(int64) -> time.Time
+
+// notifyOpenAIAutoResetFromScheduler 供调度候选过滤使用。候选过滤按请求逐账号执行，
+// 每条通知都会让后台读一次账号，不做冷却时无卡或待用卡的账号会持续占满后台协程。
+func notifyOpenAIAutoResetFromScheduler(accountID int64) {
+	notifyOpenAIAutoResetFromSchedulerAt(accountID, time.Now())
+}
+
+func notifyOpenAIAutoResetFromSchedulerAt(accountID int64, now time.Time) bool {
+	if accountID <= 0 {
+		return false
+	}
+	if last, ok := openAIAutoResetSchedulerNotifiedAt.Load(accountID); ok {
+		if lastAt, ok := last.(time.Time); ok {
+			elapsed := now.Sub(lastAt)
+			if elapsed >= 0 && elapsed < openAIAutoResetSchedulerNotifyCooldown {
+				return false
+			}
+		}
+	}
+	openAIAutoResetSchedulerNotifiedAt.Store(accountID, now)
+	notifyOpenAIAutoReset(accountID)
+	return true
 }

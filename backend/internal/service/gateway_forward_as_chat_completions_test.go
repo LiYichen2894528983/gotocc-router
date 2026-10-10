@@ -17,7 +17,6 @@ import (
 
 func TestHandleCCBufferedFromAnthropic_ToolArgumentsAreValidJSON(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -104,7 +103,6 @@ func TestExtractCCReasoningEffortFromBody(t *testing.T) {
 
 func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoning(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -142,7 +140,6 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 // without a response"（#4653 同根因；#4657 只修了 /v1/responses 桥）。
 func TestHandleCCBufferedFromAnthropic_CompactSSEFormat(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -175,7 +172,6 @@ func TestHandleCCBufferedFromAnthropic_CompactSSEFormat(t *testing.T) {
 
 func TestHandleCCStreamingFromAnthropic_CompactSSEFormat(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -199,7 +195,7 @@ func TestHandleCCStreamingFromAnthropic_CompactSSEFormat(t *testing.T) {
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleCCStreamingFromAnthropic(resp, c, "k3", "k3", nil, time.Now(), true)
+	result, err := svc.handleCCStreamingFromAnthropic(resp, c, "k3", "k3", nil, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 21, result.Usage.InputTokens)
@@ -214,7 +210,6 @@ func TestHandleCCStreamingFromAnthropic_CompactSSEFormat(t *testing.T) {
 
 func TestHandleCCStreamingFromAnthropic_LifecycleOnlyDoesNotSetOutputTiming(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -232,7 +227,7 @@ func TestHandleCCStreamingFromAnthropic_LifecycleOnlyDoesNotSetOutputTiming(t *t
 		}, "\n"))),
 	}
 
-	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(resp, c, "claude", "claude", nil, time.Now(), true)
+	result, err := (&GatewayService{}).handleCCStreamingFromAnthropic(resp, c, "claude", "claude", nil, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Nil(t, result.FirstTokenMs)
@@ -243,7 +238,6 @@ func TestHandleCCStreamingFromAnthropic_LifecycleOnlyDoesNotSetOutputTiming(t *t
 
 func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReasoning(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -268,7 +262,7 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleCCStreamingFromAnthropic(resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now(), true)
+	result, err := svc.handleCCStreamingFromAnthropic(resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 20, result.Usage.InputTokens)

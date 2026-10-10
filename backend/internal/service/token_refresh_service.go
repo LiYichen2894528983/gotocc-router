@@ -67,9 +67,8 @@ type TokenRefreshService struct {
 	runtimeBlocker   AccountRuntimeBlocker
 
 	// OpenAI privacy: 刷新成功后检查并设置 training opt-out
-	privacyClientFactory   PrivacyClientFactory
-	proxyRepo              ProxyRepository
-	openAIIdentityResolver *OpenAIGatewayService
+	privacyClientFactory PrivacyClientFactory
+	proxyRepo            ProxyRepository
 
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -130,9 +129,13 @@ func NewTokenRefreshService(
 	}
 	grokRefresher := NewGrokTokenRefresher(grokOAuthService)
 
+	kimiRefresher := NewCNTokenRefresher(PlatformKimi)
+	minimaxRefresher := NewCNTokenRefresher(PlatformMiniMax)
 	// Each provider is registered exactly once. The same registry supplies both
 	// execution and repository eligibility, preventing future platform drift.
 	s.registrations = []tokenRefreshRegistration{
+		{platform: PlatformKimi, refresher: kimiRefresher, executor: kimiRefresher},
+		{platform: PlatformMiniMax, refresher: minimaxRefresher, executor: minimaxRefresher},
 		{platform: PlatformAnthropic, refresher: claudeRefresher, executor: claudeRefresher},
 		{platform: PlatformOpenAI, refresher: openAIRefresher, executor: openAIRefresher},
 		{platform: PlatformGemini, refresher: geminiRefresher, executor: geminiRefresher},
@@ -169,17 +172,6 @@ func (s *TokenRefreshService) setCandidateAfterID(afterID int64) {
 func (s *TokenRefreshService) SetPrivacyDeps(factory PrivacyClientFactory, proxyRepo ProxyRepository) {
 	s.privacyClientFactory = factory
 	s.proxyRepo = proxyRepo
-}
-
-func (s *TokenRefreshService) SetOpenAIIdentityResolver(resolver *OpenAIGatewayService) {
-	s.openAIIdentityResolver = resolver
-}
-
-func (s *TokenRefreshService) resolveOpenAIOutboundIdentity(ctx context.Context, account *Account) openAIOutboundIdentity {
-	if s != nil && s.openAIIdentityResolver != nil {
-		return s.openAIIdentityResolver.resolveOpenAIOutboundIdentity(ctx, account)
-	}
-	return resolveOpenAIOutboundIdentityFromSettings(ctx, account, nil)
 }
 
 // SetRefreshAPI 注入统一的 OAuth 刷新 API
@@ -315,6 +307,7 @@ type rateLimitedOAuthRefreshExecutor struct {
 }
 
 func (e *rateLimitedOAuthRefreshExecutor) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	if e == nil || e.OAuthRefreshExecutor == nil {
 		return nil, errors.New("OAuth refresh executor is not configured")
 	}
@@ -848,11 +841,12 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 	refreshWindow time.Duration,
 	gate refreshAttemptGate,
 ) error {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	var lastErr error
 	maxRetries := s.maxRetries()
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if err := ctx.Err(); err != nil {
+		if err := oauthRefreshContextError(ctx); err != nil {
 			return err
 		}
 		releaseAttempt := func() {}
@@ -916,8 +910,10 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			if releaseRate != nil {
 				releaseRate()
 			}
-			attemptTimedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
-			if err == nil && newCredentials != nil && !attemptTimedOut {
+			if err == nil {
+				err = oauthRefreshContextError(attemptCtx)
+			}
+			if err == nil && newCredentials != nil {
 				newCredentials["_token_version"] = time.Now().UnixMilli()
 				if saveErr := persistAccountCredentials(attemptCtx, s.accountRepo, account, newCredentials); saveErr != nil {
 					err = fmt.Errorf("failed to save credentials: %w", saveErr)
@@ -926,7 +922,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 				}
 			}
 		}
-		attemptTimedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		attemptTimedOut := errors.Is(oauthRefreshContextError(attemptCtx), context.DeadlineExceeded) && oauthRefreshContextError(ctx) == nil
 		cancelAttempt()
 		releaseAttempt()
 		persistedAfterAttemptDeadline := attemptTimedOut && credentialsPersisted && err == nil
@@ -946,7 +942,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		}
 
 		if err == nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
+			if ctxErr := oauthRefreshContextError(ctx); ctxErr != nil {
 				if credentialsPersisted {
 					s.postRefreshStateSyncWithCleanup(ctx, account)
 				}
@@ -963,7 +959,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			s.postRefreshActions(ctx, account)
 			return nil
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := oauthRefreshContextError(ctx); ctxErr != nil {
 			if credentialsPersisted {
 				s.postRefreshStateSyncWithCleanup(ctx, account)
 			}
@@ -1208,8 +1204,6 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	s.postRefreshStateSync(ctx, account)
-	// OpenAI OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则尝试关闭训练数据共享
-	s.ensureOpenAIPrivacy(ctx, account)
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
 	s.ensureAntigravityPrivacy(ctx, account)
 	// Grok: clear soft reauth flag after a successful credential refresh.
@@ -1424,16 +1418,18 @@ func isNonRetryableRefreshError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{
-		"invalid_grant",             // refresh_token 已失效
-		"invalid_refresh_token",     // refresh_token 无效, team 账号工作区被删除会出现
-		"token_expired",             // OpenAI refresh_token 已过期，需要重新授权
-		"app_session_terminated",    // refresh_token team 账号工作区被删除
+		"invalid_grant",          // refresh_token 已失效
+		"invalid_refresh_token",  // refresh_token 无效, team 账号工作区被删除会出现
+		"token_expired",          // OpenAI refresh_token 已过期，需要重新授权
+		"app_session_terminated", // refresh_token team 账号工作区被删除
+		"refresh_token_expired",
 		"refresh_token_reused",      // OpenAI refresh_token 已被使用，必须重新授权
 		"refresh_token_invalidated", // OpenAI session ended; refresh token invalidated
-		"invalid_client",            // 客户端配置错误
-		"unauthorized_client",       // 客户端未授权
-		"access_denied",             // 访问被拒绝
-		"missing_project_id",        // 缺少 project_id
+		"openai_oauth_refresh_permanent",
+		"invalid_client",      // 客户端配置错误
+		"unauthorized_client", // 客户端未授权
+		"access_denied",       // 访问被拒绝
+		"missing_project_id",  // 缺少 project_id
 		"no refresh token available",
 		"grok_oauth_entitlement_denied",
 		"entitlement_denied",
@@ -1448,49 +1444,6 @@ func isNonRetryableRefreshError(err error) bool {
 		}
 	}
 	return false
-}
-
-// ensureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，
-// 未设置则调用 disableOpenAITraining 并持久化结果到 Extra。
-func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *Account) {
-	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
-		return
-	}
-	if s.privacyClientFactory == nil {
-		return
-	}
-	if shouldSkipOpenAIPrivacyEnsure(account.Extra) {
-		return
-	}
-
-	token, _ := account.Credentials["access_token"].(string)
-	if token == "" {
-		return
-	}
-
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
-		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
-		}
-	}
-
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL, s.resolveOpenAIOutboundIdentity(ctx, account))
-	if mode == "" {
-		return
-	}
-
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
-		slog.Warn("token_refresh.update_privacy_mode_failed",
-			"account_id", account.ID,
-			"error", err,
-		)
-	} else {
-		slog.Info("token_refresh.privacy_mode_set",
-			"account_id", account.ID,
-			"privacy_mode", mode,
-		)
-	}
 }
 
 // ensureAntigravityPrivacy 后台刷新中检查 Antigravity OAuth 账号隐私状态。

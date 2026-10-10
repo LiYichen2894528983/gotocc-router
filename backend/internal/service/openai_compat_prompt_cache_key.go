@@ -7,12 +7,18 @@ import (
 	"strings"
 
 	"github.com/LuckyKuang/sub2api-plus/internal/pkg/apicompat"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/openai"
 )
 
 const compatPromptCacheKeyPrefix = "compat_cc_"
 
 func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))
+	canonical := canonicalizeOpenAIModelAliasSpelling(trimmed)
+	// Supported canonical families share Responses cache identity; bare GPT-6 stays unknown.
+	if canonical == "gpt-6-astra" || openai.IsGPT6SolOrLunaModelSpelling(canonical) || openai.IsGPT61SolModelSpelling(canonical) {
+		return true
+	}
 	// 仅对 Responses 兼容路径支持的 GPT-5 族开启自动注入，避免 normalizeCodexModel
 	// 的默认兜底把任意模型（如 gpt-4o、claude-*）误判为 gpt-5.4。
 	if !strings.Contains(trimmed, "gpt-5") && !strings.Contains(trimmed, "codex") {

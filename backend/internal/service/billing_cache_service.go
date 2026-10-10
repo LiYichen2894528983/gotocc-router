@@ -108,6 +108,8 @@ type subscriptionCacheInvalidationPubSub interface {
 // BillingCacheService 计费缓存服务
 // 负责余额和订阅数据的缓存管理，提供高性能的计费资格检查
 type BillingCacheService struct {
+	teamWalletRepo        TeamWalletRepository
+	resellerRepo          ResellerRepository
 	cache                 BillingCache
 	userRepo              UserRepository
 	subRepo               UserSubscriptionRepository
@@ -312,6 +314,13 @@ func (s *BillingCacheService) logCacheWriteDrop(task cacheWriteTask, reason stri
 
 // GetUserBalance 获取用户余额（优先从缓存读取）
 func (s *BillingCacheService) GetUserBalance(ctx context.Context, userID int64) (float64, error) {
+	account, err := s.resellerRepo.CustomerAccount(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	if account != nil {
+		return account.CreditBalance, nil
+	}
 	if s.cache == nil {
 		// Redis不可用，直接查询数据库
 		return s.getUserBalanceFromDB(ctx, userID)
@@ -807,8 +816,13 @@ func (s *BillingCacheService) IncrementUserPlatformQuotaUsage(userID int64, plat
 // 订阅模式：检查缓存用量未超过限额（Group限额从参数传入）
 // platform 为请求的目标平台（如 "anthropic"），传空串 "" 时跳过 user × platform quota 检查。
 func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user *User, apiKey *APIKey, group *Group, subscription *UserSubscription, platform string) error {
-	// 简易模式：跳过所有计费检查
-	if s.cfg.RunMode == config.RunModeSimple {
+	// 简易模式默认跳过所有计费检查. An explicit key-window opt-in keeps
+	// balance/subscription/platform checks bypassed while enforcing the three
+	// API-key monetary windows from the database source of truth.
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		if s.cfg.SimpleModeKeyRateLimitEnabled {
+			return s.checkSimpleModeAPIKeyRateLimits(ctx, apiKey)
+		}
 		return nil
 	}
 	if s.circuitBreaker != nil && !s.circuitBreaker.Allow() {
@@ -816,9 +830,17 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	}
 
 	// 判断计费模式
-	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	isSubscriptionMode := user.TeamWalletID == nil && user.ResellerCustomer == nil && group != nil && group.IsSubscriptionType() && subscription != nil
 
-	if isSubscriptionMode {
+	if user.TeamWalletID != nil {
+		if err := s.checkTeamWalletEligibility(ctx, user); err != nil {
+			return err
+		}
+	} else if user.ResellerCustomer != nil {
+		if err := s.checkResellerBillingEligibility(ctx, user); err != nil {
+			return err
+		}
+	} else if isSubscriptionMode {
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			return err
 		}
@@ -829,7 +851,7 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	}
 
 	// user × platform quota 仅在 standard（余额）模式生效；订阅模式豁免
-	if !isSubscriptionMode {
+	if !isSubscriptionMode && user.TeamWalletID == nil {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
 		}
@@ -847,6 +869,34 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		return err
 	}
 
+	return nil
+}
+
+// checkSimpleModeAPIKeyRateLimits is deliberately DB-authoritative. Redis
+// updates are asynchronous and can be dropped or missed after a committed
+// transaction, so using the cache here could let a limited simple-mode key
+// continue past its configured window. A read failure fails closed because
+// the operator explicitly opted into enforcement.
+func (s *BillingCacheService) checkSimpleModeAPIKeyRateLimits(ctx context.Context, apiKey *APIKey) error {
+	if apiKey == nil || !apiKey.HasRateLimits() {
+		return nil
+	}
+	if s.apiKeyRateLimitLoader == nil {
+		return ErrBillingServiceUnavailable
+	}
+	data, err := s.apiKeyRateLimitLoader.GetRateLimitData(ctx, apiKey.ID)
+	if err != nil || data == nil {
+		return ErrBillingServiceUnavailable
+	}
+	if apiKey.RateLimit5h > 0 && data.EffectiveUsage5h() >= apiKey.RateLimit5h {
+		return ErrAPIKeyRateLimit5hExceeded
+	}
+	if apiKey.RateLimit1d > 0 && data.EffectiveUsage1d() >= apiKey.RateLimit1d {
+		return ErrAPIKeyRateLimit1dExceeded
+	}
+	if apiKey.RateLimit7d > 0 && data.EffectiveUsage7d() >= apiKey.RateLimit7d {
+		return ErrAPIKeyRateLimit7dExceeded
+	}
 	return nil
 }
 
@@ -1239,10 +1289,9 @@ func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
 		// 超时 50ms:覆盖正常路径与可接受抖动;Redis 异常时 hot path 不阻塞超过此值。
 		// 用 context.Background()+短超时,避免请求 ctx 取消导致刷新丢失。
 		// 显式 setCancel()(而非 defer):缩短 context 生命周期,避免 defer 延迟到函数返回。
-		// isSentinel 判定「该 entry 无任何 limit」,涵盖两类,跨窗口命中时都跳过 refresh:
-		//   1) A3 回填的 sentinel(DB 无行,短 TTL):refresh 会把短 TTL 误升级为 86400s,有害;
-		//   2) DB 有行但三 limit 全未配置的用户(TTL 86400s):refresh 纯属无意义(TTL 升级本身无害)。
-		// 两类的 enforcement(下方 limit!=nil 比较)都因 limit 全 nil 永远放行,跳过 refresh 均正确。
+		// isSentinel 判定「该 entry 无任何 limit」(DB 无行时回填的短 TTL sentinel),跨窗口命中时跳过 refresh:
+		// refresh 会把短 TTL 误升级为 86400s;其 enforcement(下方 limit!=nil 比较)因 limit 全 nil 永远放行,
+		// 跳过 refresh 不改变结果。
 		isSentinel := entry.DailyLimitUSD == nil && entry.WeeklyLimitUSD == nil && entry.MonthlyLimitUSD == nil
 		if windowExpired && s.cache != nil && !isSentinel {
 			refreshed := &UserPlatformQuotaCacheEntry{

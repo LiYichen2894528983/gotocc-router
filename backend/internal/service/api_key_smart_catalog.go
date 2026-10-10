@@ -164,6 +164,7 @@ func (s *AutoGroupResolver) BuildCodexModelsManifest(ctx context.Context, authen
 			effectivePlatform,
 			[]string{model.ID},
 			state.catalog.Accounts[group.ID],
+			group,
 			state.catalog.Routes[group.ID],
 			true,
 		)
@@ -230,7 +231,7 @@ func (s *AutoGroupResolver) loadCatalogState(ctx context.Context, authenticated 
 	if strings.TrimSpace(input.Endpoint) == "" {
 		return nil, infraerrors.BadRequest("MODEL_CATALOG_ENDPOINT_REQUIRED", "endpoint is required for automatic routing model catalog")
 	}
-	key, err := s.FreshKey(ctx, authenticated)
+	key, err := s.freshAutoKey(ctx, authenticated, false)
 	if err != nil {
 		return nil, err
 	}
@@ -333,10 +334,10 @@ func (s *AutoGroupResolver) catalogCandidateIDs(ctx context.Context, state *auto
 			}
 			seen[model] = struct{}{}
 		}
-		if !state.groups[i].CustomModelsListEnabled() {
+		if !state.groups[i].ModelAllowlistEnabled() {
 			continue
 		}
-		for _, model := range state.groups[i].ModelsListConfig.Models {
+		for _, model := range state.groups[i].ModelAllowlist.Models {
 			model = strings.TrimSpace(model)
 			if model == "" || strings.ContainsAny(model, "*?") || !sources.matches(model) {
 				continue
@@ -353,15 +354,7 @@ func (s *AutoGroupResolver) catalogCandidateIDs(ctx context.Context, state *auto
 }
 
 func autoRouteGroupCatalogAllowsModel(group *Group, model string) bool {
-	if group == nil || !group.CustomModelsListEnabled() {
-		return true
-	}
-	for _, pattern := range group.ModelsListConfig.Models {
-		if autoRouteCatalogPatternMatches(pattern, model) {
-			return true
-		}
-	}
-	return false
+	return group == nil || group.ModelAllowlist.Allows(model)
 }
 
 func (s *AutoGroupResolver) catalogSourcesForGroup(ctx context.Context, group *Group, catalog *AutoRouteCatalog, input AutoRouteRequest) (*autoRouteCatalogSources, error) {
@@ -395,6 +388,13 @@ func (s *AutoGroupResolver) catalogSourcesForGroup(ctx context.Context, group *G
 		}
 	}
 
+	if group.Platform == PlatformVideo {
+		for model, config := range group.VideoModels {
+			if config.Enabled {
+				sources.addExact(model)
+			}
+		}
+	}
 	lookup, err := s.channels.lookupGroupChannel(ctx, group.ID)
 	if err != nil {
 		return nil, ErrAutoRouteUnavailable.WithCause(err)
@@ -440,7 +440,7 @@ func autoRouteCatalogAccountUsable(group *Group, account *Account) bool {
 	if group.Platform == PlatformComposite {
 		return isConcreteRequestPlatform(account.Platform)
 	}
-	if account.Platform == group.Platform {
+	if account.Platform == group.Platform || (group.Platform == PlatformVideo && account.IsOpenAIApiKey()) {
 		return true
 	}
 	return (group.Platform == PlatformAnthropic || group.Platform == PlatformGemini) &&

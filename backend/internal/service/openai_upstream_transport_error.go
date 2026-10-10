@@ -102,9 +102,18 @@ func classifyOpenAITransportError(err error) openAITransportErrorClass {
 	return openAITransportErrorClass{Classification: "transport_error"}
 }
 
+// isClientCanceledTransportError reports whether a transport-level failure was
+// caused by the client disconnecting: the request context itself is canceled
+// and the round-trip aborted with context.Canceled. Such a failure says nothing
+// about the upstream, so it is not recorded as an Ops upstream error event.
+func isClientCanceledTransportError(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+}
+
 // handleOpenAIUpstreamTransportError handles a transport-level upstream failure
 // (Do/DoWithTLS returned a non-HTTP error: proxy/DNS/TCP/TLS). It:
-//  1. records the failure in Ops error logs (status 0, kind=request_error);
+//  1. records the failure in Ops error logs (status 0, kind=request_error),
+//     except when the client disconnected (see isClientCanceledTransportError);
 //  2. for durable faults (expired/rejected proxy creds, dead proxy, DNS/routing)
 //     temporarily unschedules the account (DB + in-memory) and logs a stable
 //     warn event that alert rules can key on;
@@ -117,14 +126,24 @@ func classifyOpenAITransportError(err error) openAITransportErrorClass {
 //
 // passthrough tags the Ops error event for the OpenAI passthrough forward path.
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
+	if recordOutboundPolicyError(c, account, err) {
+		return err
+	}
 	if err == nil {
 		return nil
+	}
+	// 仅当请求 context 自身已取消时才认定为客户端断连：存活客户端 context 下单独收到
+	// 上游 context.Canceled 必须继续走下方故障分类（见 design D4）。
+	if isClientCanceledTransportError(ctx, err) {
+		return err
 	}
 	safeErr := sanitizeUpstreamErrorMessage(err.Error())
 	classification := classifyOpenAITransportError(err)
 	SetOpsRoutingDiagnostics(c, &OpsRoutingDiagnostics{TransportFailure: classification.Classification})
 	setOpsUpstreamError(c, 0, safeErr, "")
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -142,9 +161,10 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 		return err
 	}
 
-	// Transport attempt reached the network path; count as Ollama Cloud activity.
+	// Transport attempt reached the network path; count as Ollama Cloud / OpenCode Go activity.
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
+		scheduleOpenCodeGoUsageActivity(s.deferredService, account)
 	}
 
 	if account != nil && classification.Classification != "" {
@@ -202,8 +222,9 @@ func (s *OpenAIGatewayService) tempUnscheduleOpenAITransportError(ctx context.Co
 	until := time.Now().Add(openAITransportErrorTempUnschedDuration)
 	reason := "upstream transport error (proxy/network): " + safeErr
 
-	// Immediate in-memory block (honoured by the scheduler at selection time),
-	// effective even if the DB write below fails or the account cache lags.
+	// Immediate in-memory block so this process skips the account until the
+	// persisted cooldown is visible on the scheduling Account. Selection is
+	// fail-open: empty snapshot/DB cooldown fields drop a stale local block.
 	s.BlockAccountScheduling(account, until, "transport_error")
 
 	if s.accountRepo == nil {

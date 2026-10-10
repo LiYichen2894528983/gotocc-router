@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/LuckyKuang/sub2api-plus/ent/batchimagejob"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/reseller"
 )
 
 // BatchImageJobCreate is the builder for creating a BatchImageJob entity.
@@ -20,6 +21,26 @@ type BatchImageJobCreate struct {
 	mutation *BatchImageJobMutation
 	hooks    []Hook
 	conflict []sql.ConflictOption
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (_c *BatchImageJobCreate) SetResellerSnapshot(v *reseller.Snapshot) *BatchImageJobCreate {
+	_c.mutation.SetResellerSnapshot(v)
+	return _c
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (_c *BatchImageJobCreate) SetTeamWallet(v bool) *BatchImageJobCreate {
+	_c.mutation.SetTeamWallet(v)
+	return _c
+}
+
+// SetNillableTeamWallet sets the "team_wallet" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableTeamWallet(v *bool) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetTeamWallet(*v)
+	}
+	return _c
 }
 
 // SetBatchID sets the "batch_id" field.
@@ -633,6 +654,10 @@ func (_c *BatchImageJobCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *BatchImageJobCreate) defaults() {
+	if _, ok := _c.mutation.TeamWallet(); !ok {
+		v := batchimagejob.DefaultTeamWallet
+		_c.mutation.SetTeamWallet(v)
+	}
 	if _, ok := _c.mutation.TaskName(); !ok {
 		v := batchimagejob.DefaultTaskName
 		_c.mutation.SetTaskName(v)
@@ -685,6 +710,9 @@ func (_c *BatchImageJobCreate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_c *BatchImageJobCreate) check() error {
+	if _, ok := _c.mutation.TeamWallet(); !ok {
+		return &ValidationError{Name: "team_wallet", err: errors.New(`ent: missing required field "BatchImageJob.team_wallet"`)}
+	}
 	if _, ok := _c.mutation.BatchID(); !ok {
 		return &ValidationError{Name: "batch_id", err: errors.New(`ent: missing required field "BatchImageJob.batch_id"`)}
 	}
@@ -843,6 +871,14 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 		_spec = sqlgraph.NewCreateSpec(batchimagejob.Table, sqlgraph.NewFieldSpec(batchimagejob.FieldID, field.TypeInt64))
 	)
 	_spec.OnConflict = _c.conflict
+	if value, ok := _c.mutation.ResellerSnapshot(); ok {
+		_spec.SetField(batchimagejob.FieldResellerSnapshot, field.TypeJSON, value)
+		_node.ResellerSnapshot = value
+	}
+	if value, ok := _c.mutation.TeamWallet(); ok {
+		_spec.SetField(batchimagejob.FieldTeamWallet, field.TypeBool, value)
+		_node.TeamWallet = value
+	}
 	if value, ok := _c.mutation.BatchID(); ok {
 		_spec.SetField(batchimagejob.FieldBatchID, field.TypeString, value)
 		_node.BatchID = value
@@ -1026,7 +1062,7 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 // of the `INSERT` statement. For example:
 //
 //	client.BatchImageJob.Create().
-//		SetBatchID(v).
+//		SetResellerSnapshot(v).
 //		OnConflict(
 //			// Update the row with the new values
 //			// the was proposed for insertion.
@@ -1035,7 +1071,7 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.BatchImageJobUpsert) {
-//			SetBatchID(v+v).
+//			SetResellerSnapshot(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *BatchImageJobCreate) OnConflict(opts ...sql.ConflictOption) *BatchImageJobUpsertOne {
@@ -1070,6 +1106,36 @@ type (
 		*sql.UpdateSet
 	}
 )
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (u *BatchImageJobUpsert) SetResellerSnapshot(v *reseller.Snapshot) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldResellerSnapshot, v)
+	return u
+}
+
+// UpdateResellerSnapshot sets the "reseller_snapshot" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateResellerSnapshot() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldResellerSnapshot)
+	return u
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (u *BatchImageJobUpsert) ClearResellerSnapshot() *BatchImageJobUpsert {
+	u.SetNull(batchimagejob.FieldResellerSnapshot)
+	return u
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (u *BatchImageJobUpsert) SetTeamWallet(v bool) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldTeamWallet, v)
+	return u
+}
+
+// UpdateTeamWallet sets the "team_wallet" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateTeamWallet() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldTeamWallet)
+	return u
+}
 
 // SetUserID sets the "user_id" field.
 func (u *BatchImageJobUpsert) SetUserID(v int64) *BatchImageJobUpsert {
@@ -1852,6 +1918,41 @@ func (u *BatchImageJobUpsertOne) Update(set func(*BatchImageJobUpsert)) *BatchIm
 		set(&BatchImageJobUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (u *BatchImageJobUpsertOne) SetResellerSnapshot(v *reseller.Snapshot) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetResellerSnapshot(v)
+	})
+}
+
+// UpdateResellerSnapshot sets the "reseller_snapshot" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateResellerSnapshot() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateResellerSnapshot()
+	})
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (u *BatchImageJobUpsertOne) ClearResellerSnapshot() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearResellerSnapshot()
+	})
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (u *BatchImageJobUpsertOne) SetTeamWallet(v bool) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetTeamWallet(v)
+	})
+}
+
+// UpdateTeamWallet sets the "team_wallet" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateTeamWallet() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateTeamWallet()
+	})
 }
 
 // SetUserID sets the "user_id" field.
@@ -2843,7 +2944,7 @@ func (_c *BatchImageJobCreateBulk) ExecX(ctx context.Context) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.BatchImageJobUpsert) {
-//			SetBatchID(v+v).
+//			SetResellerSnapshot(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *BatchImageJobCreateBulk) OnConflict(opts ...sql.ConflictOption) *BatchImageJobUpsertBulk {
@@ -2923,6 +3024,41 @@ func (u *BatchImageJobUpsertBulk) Update(set func(*BatchImageJobUpsert)) *BatchI
 		set(&BatchImageJobUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetResellerSnapshot sets the "reseller_snapshot" field.
+func (u *BatchImageJobUpsertBulk) SetResellerSnapshot(v *reseller.Snapshot) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetResellerSnapshot(v)
+	})
+}
+
+// UpdateResellerSnapshot sets the "reseller_snapshot" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateResellerSnapshot() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateResellerSnapshot()
+	})
+}
+
+// ClearResellerSnapshot clears the value of the "reseller_snapshot" field.
+func (u *BatchImageJobUpsertBulk) ClearResellerSnapshot() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearResellerSnapshot()
+	})
+}
+
+// SetTeamWallet sets the "team_wallet" field.
+func (u *BatchImageJobUpsertBulk) SetTeamWallet(v bool) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetTeamWallet(v)
+	})
+}
+
+// UpdateTeamWallet sets the "team_wallet" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateTeamWallet() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateTeamWallet()
+	})
 }
 
 // SetUserID sets the "user_id" field.

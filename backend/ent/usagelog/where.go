@@ -175,6 +175,11 @@ func AudioOutputTokens(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldAudioOutputTokens, v))
 }
 
+// CodexRolloutBudgetUnits applies equality check predicate on the "codex_rollout_budget_units" field. It's identical to CodexRolloutBudgetUnitsEQ.
+func CodexRolloutBudgetUnits(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCodexRolloutBudgetUnits, v))
+}
+
 // InputCost applies equality check predicate on the "input_cost" field. It's identical to InputCostEQ.
 func InputCost(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldInputCost, v))
@@ -233,6 +238,11 @@ func Stream(v bool) predicate.UsageLog {
 // DurationMs applies equality check predicate on the "duration_ms" field. It's identical to DurationMsEQ.
 func DurationMs(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldDurationMs, v))
+}
+
+// TimingVersion applies equality check predicate on the "timing_version" field. It's identical to TimingVersionEQ.
+func TimingVersion(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldTimingVersion, v))
 }
 
 // FirstTokenMs applies equality check predicate on the "first_token_ms" field. It's identical to FirstTokenMsEQ.
@@ -1460,6 +1470,56 @@ func AudioOutputTokensLTE(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldAudioOutputTokens, v))
 }
 
+// CodexRolloutBudgetUnitsEQ applies the EQ predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldCodexRolloutBudgetUnits, v))
+}
+
+// CodexRolloutBudgetUnitsNEQ applies the NEQ predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsNEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldCodexRolloutBudgetUnits, v))
+}
+
+// CodexRolloutBudgetUnitsIn applies the In predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldCodexRolloutBudgetUnits, vs...))
+}
+
+// CodexRolloutBudgetUnitsNotIn applies the NotIn predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsNotIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldCodexRolloutBudgetUnits, vs...))
+}
+
+// CodexRolloutBudgetUnitsGT applies the GT predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsGT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldCodexRolloutBudgetUnits, v))
+}
+
+// CodexRolloutBudgetUnitsGTE applies the GTE predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsGTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldCodexRolloutBudgetUnits, v))
+}
+
+// CodexRolloutBudgetUnitsLT applies the LT predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsLT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldCodexRolloutBudgetUnits, v))
+}
+
+// CodexRolloutBudgetUnitsLTE applies the LTE predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsLTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldCodexRolloutBudgetUnits, v))
+}
+
+// CodexRolloutBudgetUnitsIsNil applies the IsNil predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldCodexRolloutBudgetUnits))
+}
+
+// CodexRolloutBudgetUnitsNotNil applies the NotNil predicate on the "codex_rollout_budget_units" field.
+func CodexRolloutBudgetUnitsNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldCodexRolloutBudgetUnits))
+}
+
 // InputCostEQ applies the EQ predicate on the "input_cost" field.
 func InputCostEQ(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldInputCost, v))
@@ -1898,6 +1958,46 @@ func DurationMsIsNil() predicate.UsageLog {
 // DurationMsNotNil applies the NotNil predicate on the "duration_ms" field.
 func DurationMsNotNil() predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldNotNull(FieldDurationMs))
+}
+
+// TimingVersionEQ applies the EQ predicate on the "timing_version" field.
+func TimingVersionEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldTimingVersion, v))
+}
+
+// TimingVersionNEQ applies the NEQ predicate on the "timing_version" field.
+func TimingVersionNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldTimingVersion, v))
+}
+
+// TimingVersionIn applies the In predicate on the "timing_version" field.
+func TimingVersionIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldTimingVersion, vs...))
+}
+
+// TimingVersionNotIn applies the NotIn predicate on the "timing_version" field.
+func TimingVersionNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldTimingVersion, vs...))
+}
+
+// TimingVersionGT applies the GT predicate on the "timing_version" field.
+func TimingVersionGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldTimingVersion, v))
+}
+
+// TimingVersionGTE applies the GTE predicate on the "timing_version" field.
+func TimingVersionGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldTimingVersion, v))
+}
+
+// TimingVersionLT applies the LT predicate on the "timing_version" field.
+func TimingVersionLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldTimingVersion, v))
+}
+
+// TimingVersionLTE applies the LTE predicate on the "timing_version" field.
+func TimingVersionLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldTimingVersion, v))
 }
 
 // FirstTokenMsEQ applies the EQ predicate on the "first_token_ms" field.

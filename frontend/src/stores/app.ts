@@ -34,6 +34,7 @@ export const useAppStore = defineStore('app', () => {
   const docUrl = ref<string>('')
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
+  let publicSettingsRequestId = 0
 
   // Version cache state
   const versionLoaded = ref<boolean>(false)
@@ -433,6 +434,8 @@ export const useAppStore = defineStore('app', () => {
         channel_monitor_enabled: true,
         channel_monitor_default_interval_seconds: 60,
         available_channels_enabled: false,
+        subscription_enabled: true,
+        payment_balance_disabled: false,
         model_plaza_enabled: false,
         model_plaza_require_auth: true,
         plugin_management_enabled: false,
@@ -444,6 +447,7 @@ export const useAppStore = defineStore('app', () => {
       })
     }
 
+    const requestId = publicSettingsRequestId
     publicSettingsLoading.value = true
     let apiRequest: Promise<PublicSettings>
     try {
@@ -456,6 +460,7 @@ export const useAppStore = defineStore('app', () => {
 
     const request = apiRequest
       .then((data) => {
+        if (requestId !== publicSettingsRequestId) return null
         applySettings(data)
         return data
       })
@@ -478,8 +483,12 @@ export const useAppStore = defineStore('app', () => {
    * Clear public settings cache
    */
   function clearPublicSettingsCache(): void {
+    publicSettingsRequestId += 1
+    publicSettingsRequest = null
+    publicSettingsLoading.value = false
     publicSettingsLoaded.value = false
     cachedPublicSettings.value = null
+    if (typeof window !== 'undefined') delete window.__APP_CONFIG__
   }
 
   /**

@@ -112,28 +112,16 @@ func truncateAuditExtraString(value string, limit int) string {
 
 // auditSensitiveReads 需要审计的敏感 GET 读取（method+FullPath → 动作名）。
 var auditSensitiveReads = map[string]string{
-	"GET /api/v1/admin/proxies/data":                                 "admin.proxies.export",
-	"GET /api/v1/admin/redeem-codes/export":                          "admin.redeem_codes.export",
-	"GET /api/v1/admin/backups/:id/download-url":                     "admin.backups.download",
-	"GET /api/v1/admin/settings/admin-api-key":                       "admin.admin_api_key.read",
-	"GET /api/v1/admin/users/:id/api-keys":                           "admin.users.api_keys.read",
-	"GET /api/v1/admin/support/users/:user_id":                       "admin.support.profile.read",
-	"GET /api/v1/admin/support/users/:user_id/profile":               "admin.support.profile.read",
-	"GET /api/v1/admin/support/users/:user_id/api-keys":              "admin.support.api_keys.read",
-	"GET /api/v1/admin/support/users/:user_id/usage":                 "admin.support.usage.read",
-	"GET /api/v1/admin/support/users/:user_id/async-images":          "admin.support.async_images.read",
-	"GET /api/v1/admin/support/users/:user_id/async-images/:task_id": "admin.support.async_image.read",
-	"GET /api/v1/admin/support/users/:user_id/channels":              "admin.support.channels.read",
-	"GET /api/v1/admin/support/users/:user_id/channel-status":        "admin.support.channel_status.read",
-	"GET /api/v1/admin/support/users/:user_id/channel-status/:id":    "admin.support.channel_status_detail.read",
-	"GET /api/v1/admin/support/users/:user_id/subscriptions":         "admin.support.subscriptions.read",
-	"GET /api/v1/admin/support/users/:user_id/orders":                "admin.support.orders.read",
-	"GET /api/v1/admin/support/users/:user_id/orders/:order_id":      "admin.support.order.read",
-	"GET /api/v1/admin/groups/:id/api-keys":                          "admin.groups.api_keys.read",
-	"GET /api/v1/admin/backups/s3-config":                            "admin.backups.s3_config.read",
-	"GET /api/v1/admin/data-management/s3/config":                    "admin.data_management.s3_config.read",
-	"GET /api/v1/admin/ip-access-control/failure-states":             "security.ip_login_failure.read",
-	"GET /api/v1/admin/prompt-audit/events/:id":                      "admin.prompt_audit.event.read",
+	"GET /api/v1/admin/proxies/data":                     "admin.proxies.export",
+	"GET /api/v1/admin/redeem-codes/export":              "admin.redeem_codes.export",
+	"GET /api/v1/admin/backups/:id/download-url":         "admin.backups.download",
+	"GET /api/v1/admin/settings/admin-api-key":           "admin.admin_api_key.read",
+	"GET /api/v1/admin/users/:id/api-keys":               "admin.users.api_keys.read",
+	"GET /api/v1/admin/groups/:id/api-keys":              "admin.groups.api_keys.read",
+	"GET /api/v1/admin/backups/s3-config":                "admin.backups.s3_config.read",
+	"GET /api/v1/admin/data-management/s3/config":        "admin.data_management.s3_config.read",
+	"GET /api/v1/admin/ip-access-control/failure-states": "security.ip_login_failure.read",
+	"GET /api/v1/admin/prompt-audit/events/:id":          "admin.prompt_audit.event.read",
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
@@ -160,6 +148,7 @@ var auditActionOverrides = map[string]string{
 	"DELETE /api/v1/admin/settings/admin-api-key":                  "admin.admin_api_key.delete",
 	"PUT /api/v1/admin/prompt-audit/config":                        "admin.prompt_audit.config.update",
 	"POST /api/v1/admin/prompt-audit/endpoints/probe":              "admin.prompt_audit.endpoint.probe",
+	"POST /api/v1/admin/prompt-audit/test":                         "admin.prompt_audit.text.preview",
 	"DELETE /api/v1/admin/prompt-audit/events/:id":                 "admin.prompt_audit.event.delete",
 	"POST /api/v1/admin/prompt-audit/events/batch-delete":          "admin.prompt_audit.events.batch_delete",
 	"POST /api/v1/admin/prompt-audit/events/delete-preview":        "admin.prompt_audit.events.delete_preview",
@@ -176,6 +165,7 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"PUT /api/v1/admin/accounts/:id/ollama-cloud-usage/session": {},
 	"PUT /api/v1/admin/prompt-audit/config":                     {},
 	"POST /api/v1/admin/prompt-audit/endpoints/probe":           {},
+	"POST /api/v1/admin/prompt-audit/test":                      {},
 	"DELETE /api/v1/admin/prompt-audit/events/:id":              {},
 	"POST /api/v1/admin/prompt-audit/events/batch-delete":       {},
 	"POST /api/v1/admin/prompt-audit/events/delete-preview":     {},
@@ -199,7 +189,10 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 				action = v
 			}
 		case "GET":
-			if v, ok := auditSensitiveReads[routeKey]; ok {
+			if strings.HasPrefix(c.FullPath(), "/api/v1/admin/support/users/:user_id/") {
+				record = true
+				action = "admin.support.read"
+			} else if v, ok := auditSensitiveReads[routeKey]; ok {
 				record = true
 				action = v
 			}

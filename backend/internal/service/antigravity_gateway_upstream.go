@@ -19,6 +19,7 @@ import (
 
 // ForwardUpstream 使用 base_url + /v1/messages + 双 header 认证透传上游 Claude 请求
 func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 	sessionID := getSessionID(c)
@@ -79,7 +80,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.Do(prepareAccountOutboundRequest(req, account), proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)
 		return nil, fmt.Errorf("upstream request failed: %w", err)
@@ -95,10 +96,11 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, 0, "", false)
 		}
 
-		// 透传上游错误
+		// 透传上游错误：状态码与错误语义保持不变，仅对回写客户端的错误体做
+		// Antigravity 身份脱敏（项目号/服务账号邮箱/consumer id）。
 		c.Header("Content-Type", resp.Header.Get("Content-Type"))
 		c.Status(resp.StatusCode)
-		_, _ = c.Writer.Write(respBody)
+		_, _ = c.Writer.Write(sanitizeAntigravityErrorBody(respBody))
 
 		return &ForwardResult{
 			Model: originalModel,
@@ -167,6 +169,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		FirstOutputMs:                 firstOutputMs,
 		FirstOutputKind:               firstOutputKind,
 		ClientDisconnect:              clientDisconnect,
+		UpstreamHeaders:               resp.Header,
 		Usage: ClaudeUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,

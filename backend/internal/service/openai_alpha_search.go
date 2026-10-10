@@ -27,6 +27,8 @@ const (
 // *OpenAIForwardResult（WebSearchCalls=1，供按次计费）；上游错误被原样透传
 // 给客户端时返回 (nil, nil)，不产生计费。
 func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, err error) {
+	ctx = WithOutboundIdentityScope(ctx, c)
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	defer func() { finalizeClientDisconnectForwardResult(ctx, c, result, err) }()
 	if s == nil || c == nil || account == nil {
 		return nil, fmt.Errorf("service, context, and account are required")
@@ -107,7 +109,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) ||
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) ||
 			isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			// alpha/search 是独立的工具端点，单次 401 不能证明账号的模型调用
@@ -130,7 +132,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 		}
 	}
 
-	if !account.IsShadow() {
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices && !account.IsShadow() {
 		s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
 	}
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -145,11 +147,12 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 		return nil, nil
 	}
 	return &OpenAIForwardResult{
-		RequestID:      strings.TrimSpace(resp.Header.Get("x-request-id")),
-		Model:          requestedModel,
-		UpstreamModel:  upstreamModel,
-		Duration:       time.Since(upstreamStart),
-		WebSearchCalls: 1,
+		RequestID:       strings.TrimSpace(resp.Header.Get("x-request-id")),
+		UpstreamHeaders: resp.Header,
+		Model:           requestedModel,
+		UpstreamModel:   upstreamModel,
+		Duration:        time.Since(upstreamStart),
+		WebSearchCalls:  1,
 	}, nil
 }
 
@@ -170,7 +173,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	if err != nil {
 		return nil, err
 	}
-	req, err := s.buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx, c, account, alphaBody, responsesBody, token)
+	req, err := s.buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx, c, account, responsesBody, token)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +197,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			// 仍按 alpha/search 工具请求处理：PAT 的工具链路失败不能直接永久置错。
 			shouldDisable := false
@@ -223,7 +226,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 		return nil, nil
 	}
 
-	if !account.IsShadow() {
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices && !account.IsShadow() {
 		s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
 	}
 	alphaRespBody, err := openAIAlphaSearchResponseFromResponsesSSE(respBody)
@@ -234,6 +237,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	c.Data(http.StatusOK, "application/json", alphaRespBody)
 	return &OpenAIForwardResult{
 		RequestID:        strings.TrimSpace(resp.Header.Get("x-request-id")),
+		UpstreamHeaders:  resp.Header,
 		Model:            requestedModel,
 		UpstreamModel:    upstreamModel,
 		UpstreamEndpoint: "/v1/responses",
@@ -247,7 +251,7 @@ func openAIAlphaSearchSchedulingModel(account *Account, requestedModel string) s
 	return canonicalOpenAIAccountSchedulingModel(account, requestedModel)
 }
 
-func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx context.Context, c *gin.Context, account *Account, alphaBody []byte, body []byte, token string) (*http.Request, error) {
+func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -270,16 +274,14 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
+
 	if turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata"); turnMetadata != "" {
 		req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
 	}
 	apiKeyID := getAPIKeyIDFromContext(c)
-	if sessionID := strings.TrimSpace(gjson.GetBytes(alphaBody, "id").String()); sessionID != "" {
-		isolated := isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), sessionID)
-		req.Header.Set("Session_ID", isolated)
-		req.Header.Set("Conversation_ID", isolated)
-	}
+	// Official standalone search sends only turn-metadata and originator on the
+	// request; it carries no session headers, so the gateway does not synthesize
+	// any session alias here.
 	applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), apiKeyID)
 	account.ApplyHeaderOverrides(req.Header)
 	identity := s.applyOpenAIOutboundIdentity(ctx, account, req.Header, true)
@@ -395,31 +397,31 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
 			return nil, fmt.Errorf("resolve chatgpt account headers: %w", err)
 		}
-
-		if turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata"); turnMetadata != "" {
-			req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
-		}
-		applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 	}
+	// SearchClient sends turn metadata with every provider, including API keys.
+	// Keep its opaque search context while retaining existing account ID isolation.
+	if turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata"); turnMetadata != "" {
+		req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
+	}
+	applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 
 	account.ApplyHeaderOverrides(req.Header)
 	stripOpenAIAlphaSearchResponsesHeaders(req.Header)
-	if account.UsesOpenAICodexProtocol() {
-		identity := s.applyOpenAIOutboundIdentity(ctx, account, req.Header, true)
-		SetOpsRoutingDiagnostics(c, &OpsRoutingDiagnostics{OutboundIdentitySource: identity.Source})
-	}
+	identity := s.applyOpenAIOutboundIdentity(ctx, account, req.Header, account.UsesOpenAICodexProtocol())
+	SetOpsRoutingDiagnostics(c, &OpsRoutingDiagnostics{OutboundIdentitySource: identity.Source})
 	return req, nil
 }
 
 // stripOpenAIAlphaSearchResponsesHeaders 让独立搜索请求与官方 Codex
 // SearchClient 的线协议保持一致。alpha/search 不是 /responses 的子请求：官方
-// 客户端仅在 Provider/Auth 基础头之外附加 x-codex-turn-metadata，不发送
+// 客户端在 Provider/Auth 基础头之外附加 x-codex-turn-metadata 和可选的
+// thread originator；项目的 originator 仍由可信身份快照决定。不发送
 // OpenAI-Beta、会话隔离或 Responses Lite 状态头。originator 与 User-Agent
 // 属于官方默认客户端头，必须保留。
 //
 // alpha/search 使用专用构造器生成官方 SearchClient 的最小线协议形态；
 // 该函数作为最后一道防线，避免账号 header 覆写或后续改动重新带入
-// Responses 专用头，使 PAT 的 alpha/search 被上游按错误认证路径处理。
+// Responses 专用头，使独立搜索被上游按错误协议处理。
 func stripOpenAIAlphaSearchResponsesHeaders(headers http.Header) {
 	if headers == nil {
 		return
@@ -432,7 +434,11 @@ func stripOpenAIAlphaSearchResponsesHeaders(headers http.Header) {
 		"X-Codex-Turn-State",
 		responsesLiteHeaderKey,
 	} {
-		headers.Del(key)
+		for name := range headers {
+			if strings.EqualFold(name, key) {
+				delete(headers, name)
+			}
+		}
 	}
 }
 
@@ -535,7 +541,10 @@ func shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(statusCode int) bool {
 }
 
 func openAIAlphaSearchResponseFromResponsesSSE(body []byte) ([]byte, error) {
-	output, results := parseOpenAIResponsesSSEForAlphaSearch(body)
+	output, results, err := parseOpenAIResponsesSSEForAlphaSearch(body)
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{
 		"output": output,
 	}
@@ -545,7 +554,7 @@ func openAIAlphaSearchResponseFromResponsesSSE(body []byte) ([]byte, error) {
 	return json.Marshal(resp)
 }
 
-func parseOpenAIResponsesSSEForAlphaSearch(body []byte) (string, []any) {
+func parseOpenAIResponsesSSEForAlphaSearch(body []byte) (string, []any, error) {
 	text := strings.ReplaceAll(string(body), "\r\n", "\n")
 	var output strings.Builder
 	var completedResponse any
@@ -561,13 +570,28 @@ func parseOpenAIResponsesSSEForAlphaSearch(body []byte) (string, []any) {
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
+		switch event["type"] {
+		case "error", "response.failed", "response.incomplete":
+			return "", nil, fmt.Errorf("alpha search responses stream ended with %s", event["type"])
+		case "response.completed":
+			response, ok := event["response"].(map[string]any)
+			if !ok || response == nil {
+				return "", nil, fmt.Errorf("alpha search responses completion is missing its response")
+			}
+			if status, present := response["status"]; present && status != "completed" {
+				return "", nil, fmt.Errorf("alpha search responses completion has a non-success status")
+			}
+			completedResponse = response
+		}
 		if delta, _ := event["delta"].(string); delta != "" && event["type"] == "response.output_text.delta" {
 			_, _ = output.WriteString(delta)
 		}
-		if event["type"] == "response.completed" {
-			completedResponse = event["response"]
-		}
 		collectOpenAIAlphaSearchURLCitations(event, &results, seenURLs)
+	}
+	// A transport-level 200, deltas or [DONE] alone are not a successful
+	// search. Do not return partial content or a billable result on EOF.
+	if completedResponse == nil {
+		return "", nil, fmt.Errorf("alpha search responses stream ended before completion")
 	}
 
 	out := output.String()
@@ -575,7 +599,7 @@ func parseOpenAIResponsesSSEForAlphaSearch(body []byte) (string, []any) {
 		out = extractOpenAIResponsesCompletedText(completedResponse)
 		collectOpenAIAlphaSearchURLCitations(completedResponse, &results, seenURLs)
 	}
-	return out, results
+	return out, results, nil
 }
 
 func openAIAlphaSearchSSEData(block string) string {

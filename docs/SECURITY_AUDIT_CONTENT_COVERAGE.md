@@ -1,21 +1,53 @@
 # Security Audit Content Coverage
 
+Administrator [read-only user assistance](USER_SUPPORT_VIEW.md) exposes explicitly registered panel GET reads, including existing image history, downloads and model catalogs. Model catalogs reuse the existing discovery handlers and trusted outbound identity contract. It does not expose inference, image submission, provider probes or other gateway write paths. The real administrator remains the management-audit actor, while the separately validated target scopes reads. No inference extraction, moderation ordering or outbound identity behavior changes in this flow.
+
 This document is the normative content-extraction matrix for Content
 Moderation and Prompt Audit. The shared implementation is
 `backend/internal/auditcontent`; protocol handlers and account paths must not
 maintain alternate text extractors.
 
+Usage timing observers are separate from this ingress extraction contract.
+Classifying upstream `compaction`/`compaction_summary` output for timing does not
+add an ingress extraction rule, policy decision, or audit bypass. Encrypted
+compact output is not treated as a text-token delta; see [usage timing](USAGE_TIMING.md).
+
+The authenticated [available-channel catalog](AVAILABLE_CHANNELS.md) is a
+configuration read. Its local price calculations do not accept inference
+content, select accounts, acquire inference concurrency, reserve balances or
+contact providers. Catalog search and price details stay in the browser. This
+view adds no inference endpoint, extraction input or alternative audit path;
+actual model requests still enter both audit engines through the existing
+HTTP/WS handlers before their side effects.
+
 ## Boundary And Ordering
 
-Automatic API-key routing resolves authorized group configuration before this
-boundary so group-scoped policies receive the real group ID. Resolution does
-not select an account, maintain subscription windows, consume quota, or contact
-upstream. The original HTTP/WS payload remains the audit input; composite model
-rewrites follow audit. Final admission rechecks the Key, payer, group and
-subscription before downstream execution. Model priority settings change only
-new candidate order, never a bound turn or task. Responses continuation must
-restore the same Key/group/account, and cannot recover by removing its context
-ID. See [API Key Smart Routing](API_KEY_SMART_ROUTING.md).
+Forwarding-account outbound identity presets are resolved after this boundary
+and account selection. UA/SDK declarations are never audit inputs or an audit bypass.
+Claude billing-header version rewriting uses the selected outbound identity;
+the canonical inbound content shared by both audit engines stays unchanged.
+OAuth, API-key, Bedrock, Vertex and compatible adapters retain the same ordering.
+Token-count forwarding captures its identity only after ingress audit and
+account selection, before token acquisition or request construction. Signature
+retries reuse that snapshot; they do not re-extract or change the audited input.
+Responses WS allocates its outbound identity scope after the first-turn audit
+and before credential refresh or the upstream handshake. The scope only retains
+resolver results; it does not evaluate content, select an account or perform I/O.
+Reusing a scope on retry or reconnection never skips subsequent-turn audit.
+Prompt Audit inference/model probes and Content Moderation calls use their own
+configured supplier credentials and a separate trusted outbound identity under
+[Outbound Identity](OUTBOUND_IDENTITY.md). They resolve the `openai:apikey`
+type default without selecting or inheriting a forwarding account. Prompt
+chunks and same-credential retries retain a supplier snapshot; failover resolves
+the new owner. These headers do not change canonical extraction, scan payloads,
+audit decisions or exception/pass-through semantics. Forwarding still waits for
+the required ingress audit result.
+Standalone search preserves `X-Codex-Turn-Metadata` for OAuth and API keys,
+including opaque `mcp_request_meta` / `openai/search_context` metadata. This
+protocol header is not a content-extraction input or an audit decision. The
+canonical Alpha Search body (`commands`, `settings`, `input`) still enters both
+engines before account selection and outbound header construction; retaining
+metadata or changing the passthrough switch cannot skip that boundary.
 
 Every accepted HTTP request, WebSocket turn, and Live Sideband client frame
 must cross the same security-audit boundary after authentication and basic
@@ -26,11 +58,59 @@ request validation, but before:
 3. routing, retry, probe, fingerprint, or protocol transformations; and
 4. any upstream request or frame write.
 
+Responses WebSocket connection leases also follow this ordering: upgrade and
+first-message syntax/model validation precede first-turn audit, and Redis ingress
+capacity is acquired only after audit permits the turn. Rejected or malformed
+first frames never reserve a lease. The first-message deadline bounds sockets
+awaiting content. After acquisition, renewal and release cover the remaining
+connection lifetime; subsequent frames still cross the canonical audit hook.
+
+In-flight balance reservations follow the same boundary on HTTP and Responses
+WebSocket paths. First-turn audit precedes session reservation; later turns
+still enter both engines before billing eligibility, routing or upstream
+writes. Handler and asynchronous billing-task reservation ownership changes
+do not alter extraction. Standalone web/x search audits its normalized user
+query before billing or reservation. Grok TTS audits its normalized spoken
+text before those side effects. Claude Code fallback routing on Responses and
+Chat Completions remains behind canonical audit. Unknown siblings and
+unextractable content retain the existing pass-through contract.
+
 Session affinity, account type, inbound role labels, envelope `type` values,
 and protocol adapters cannot bypass the audit hook. Extraction remains
 compatible with `v0.1.177+custom.003`: unsupported or unrecognized content may
 produce no audit input and pass through, while every successfully extracted
 sibling segment remains auditable.
+
+Sonnet 5.5 stable computer/browser toolsets (`computer_toolset_20260801` and
+`browser_toolset_20260801`) use this same Messages extraction contract. New
+toolset state and unknown provider options pass through; recognized sibling
+user text remains available to both engines. The stable-toolset semantic test
+in `security_audit_content_contract_test.go` covers that mixed payload.
+
+## Risk-Control User Allowlist
+
+The admin cyber-risk center stores `cyber_policy_user_allowlist` in the settings
+store, empty by default. It accepts positive platform user IDs separated by
+commas or whitespace, rejects invalid IDs, and deduplicates entries. Membership
+applies to all of that user's API keys. Refresh failures retain the last valid
+membership snapshot and retry; a successful edit replaces it.
+
+An allowlisted user still enters the canonical ingress audit before account
+selection, billing, concurrency acquisition or upstream writes. Content
+Moderation keyword, hash, pre-block and observation hits retain their evidence
+with mode `risk_control_log_only`. Network-policy hits retain the existing
+`cyber_policy` action with mode `cyber_log_only`. Both modes are excluded from
+violation counts alongside the existing action exclusions. A log-only network
+event skips both synchronous and deferred automatic bans, API-key disabling,
+session-block writes and notification email, including when the Plus immediate
+cyber-ban option is enabled.
+
+This setting changes Content Moderation and cyber-risk penalties. Prompt Audit
+retains its independently configured policy and shares the same extractor;
+membership does not bypass its audit hook or change extraction semantics.
+Unknown structures and extraction failures retain the pass-through and
+structured exception-log contract below. See the allowlist service tests and
+the HTTP/WS ingress side-effect ordering regressions for both engines.
 
 ## Canonical Result
 
@@ -68,6 +148,7 @@ classifications.
 | Alpha Search | Deterministically serialized, media-sanitized `commands`, `settings`, and top-level `input`, including `commands.search_query[].q` and Responses-shaped input items | Every extracted value is current; Responses-shaped input retains its item attribution. Successfully extracted siblings remain auditable when another field is incomplete. | Empty collections and media-only values; URLs, base64 payloads, and opaque media fields are omitted from structured text |
 | OpenAI Embeddings | String or string-array `input` | Every string input is current | Empty input and unsupported token-ID arrays produce no audit text and pass through |
 | Gemini | `systemInstruction`/`system_instruction`; tools; `contents`/`content`; batched `requests`; `instances[].prompt`; part text; `functionCall` arguments; `functionResponse.response` | Last content item is current; system and tools remain current audit context | `inlineData`/`fileData` media-only parts |
+| TypeSafe System One | Question IDs; every question field name and value except the validated `type`, including `instructions` and `criteria` values; unknown question and top-level extension fields; the evaluated `state` | Every extracted leaf is current, client-controlled direct-user text; keys are visited in sorted order so the canonical document and Prompt Audit hash stay stable, and the `state` is the final canonical segment | `model`, `stream`, and validated `type` enum values produce no text; non-string scalars emit nothing and do not mark the document incomplete; a literal `<system-reminder>` or `<environment_context>` is ordinary audited evaluation text rather than CLI harness metadata |
 | Images and media | Deterministic prompt-like keys such as prompt, description, query, lyrics, negative prompt, and input | Every extracted prompt is current; duplicate text is emitted once | HTTP(S) URLs, `data:image`/`data:video` values, and large base64-like media payloads |
 
 For unknown protocol labels, the fallback recognizes Chat-shaped `messages`,
@@ -119,22 +200,29 @@ Both engines consume the same canonical document:
 | Engine/mode | Segment selection |
 | --- | --- |
 | Content Moderation | Scans only current direct-user text and images. Chat and Anthropic require an explicit `user` role; Responses, Live, and Gemini also accept their protocol-defined roleless user forms. Direct Alpha Search queries, embedding strings, and media prompts remain eligible. Instructions, system/developer context, reusable prompt variables, assistant/model messages, reasoning, tool definitions/calls/results, approval responses, and tool-produced images are excluded so platform or external content is not attributed to the user. |
-| Prompt Audit full/async | Scans the client-controlled transcript: user messages (including role-less Responses/Gemini/embeddings/media forms), plus system/developer/instructions, assistant/model text, reasoning, tool definitions/calls/results, reusable prompt variables, search queries, embedding strings, and media prompts. Stored full prompt and redacted preview remain newest-to-oldest so the preview head is the latest turn. Client harness XML blocks inside user text (`environment_context`, `permission_profile`, `system-reminder`, `filesystem`) are stripped; surrounding user sentences remain. |
-| Prompt Audit blocking latest-turn-only | When enabled, scans the latest actual user text after the same client-harness XML strip, its subsequent tool results, and the nearest preceding assistant/model turn so continuation jailbreaks cannot drop the prior output. Older user turns, instructions, and tool schema stay out of this narrow window. A request with no user text cannot be narrowed safely and falls back to the full client-controlled transcript. |
+| Prompt Audit blocking and async | Scans the same current direct-user text as Content Moderation. It does not scan images. Chat and Anthropic require an explicit `user` role; Responses, Live, and Gemini also accept their protocol-defined roleless user forms. Direct Alpha Search queries, embedding strings, and media prompts remain eligible. Instructions, system/developer context, reusable prompt variables, assistant/model messages, reasoning, tool definitions/calls/results, and approval responses are excluded. A turn with no current user text is an empty selection. Client harness XML blocks inside user text (`environment_context`, `permission_profile`, `system-reminder`, `filesystem`) are stripped; surrounding user sentences remain. Native System One is the exception: its literal `<system-reminder>`/`<environment_context>` text is ordinary audited content that is never stripped, and its evaluated state is promoted to the priority segment. |
 
-Sharing a canonical document does not mean that the engines select identical
-segments. Content Moderation preserves the `v0.1.177+custom.003` attribution
+Sharing a canonical document does not mean that the engines evaluate identical
+payloads. Content Moderation preserves the `v0.1.177+custom.003` attribution
 rule: only a direct user submission may produce a user content-policy
-violation. Prompt Audit Guard scans the client-controlled transcript, so
-jailbreak text in system/developer/assistant/tool fields remains visible to
-blocking and async review. Ordinary user `hi` still blocks when that text
-itself is a jailbreak. Client wrapper XML such as `<environment_context>`
-inside a user message is stripped so sentences like `你能做什么？` are scanned
-without the harness block. A turn containing only instructions, a tool
-result, or tool schema is still Prompt Audit content; a request with no
-recognized client-controlled text remains an empty selection. Incomplete canonical extraction is
+violation, and it may also scan current-user images. Prompt Audit Guard scans
+that same current-user text through Qwen3Guard and never treats URLs or encoded
+media as prompt text. Ordinary user `hi` still blocks when that text itself is
+a jailbreak. Client wrapper XML such as `<environment_context>` inside a user
+message is stripped so sentences like `你能做什么？` are scanned without the
+harness block. A turn containing only instructions, a tool result, or tool
+schema is an empty Prompt Audit selection. Incomplete canonical extraction is
 observable but does not override either engine's selection policy: extracted
 content is still evaluated, while an empty selection passes through.
+
+The optional Codex environment-timezone alignment rewrites the model-visible
+`<timezone>` / `<current_date>` pair inside the stripped `<environment_context>`
+wrapper block at the outbound build stage — after ingress security audit has
+already consumed the original body, and never on the audit path itself. The
+rewrite is cosmetic (IANA timezone name and that timezone's current date),
+never injects new user text, keeps failures silent by preserving the original
+self-consistent block, and therefore does not create an audit-vs-upstream
+content divergence for either engine.
 
 Content Moderation list rows keep a 240-rune redacted `input_excerpt`. The
 admin detail view stores `input_content` as the same current-user scan window
@@ -224,40 +312,10 @@ not added to audit records.
 
 ## Prompt Audit Operations
 
-Prompt Audit configuration includes one global audit prompt. Missing legacy
-values normalize to the built-in defensive template before an active snapshot
-is installed, so an upgraded deployment does not send unframed user content
-while waiting for an administrator save. Administrators may edit the template
-or restore the current built-in value in the configuration page. The trimmed
-value is required and limited to 20,000 Unicode code points; config audit logs
-and change summaries retain only its SHA-256, never its text.
-
-Every OpenAI-compatible Guard model call sends exactly two messages. The audit
-prompt is the `system` message. The bounded audit chunk is JSON-string encoded,
-wrapped in `<user_input>...</user_input>`, and sent as the separate `user`
-message. JSON encoding prevents text inside the chunk from closing that tag or
-claiming a new message role. Blocking evaluation, asynchronous workers, and
-the model call used by endpoint probes all use the active audit
-prompt. The configured `response_format` selects either the existing Qwen3Guard
-`Safety` / `Categories` parser or the explicit `confidence_json` parser. JSON
-requires a numeric `confidence` in [0,1] and an optional `reason`. The configured
-`confidence_threshold` is inclusive: equal or higher blocks; lower passes.
-The root `prompt-audit-defaults.json` owns the default threshold (0.8) and JSON
-template. Missing fields on legacy stored configurations retain Qwen3Guard;
-there is no response-format detection or fallback between parsers.
-
-The model probe always calls Chat Completions and parses its response using
-the current editor draft (or the saved configuration for legacy clients). A
-successful models listing alone cannot report a healthy audit node.
-Latest-turn selection also includes tool outputs following the latest actual
-user turn. Anthropic tool_result blocks remain tool outputs even though their
-envelope role is user. Full-transcript selection preserves upstream behavior.
-
-Prompt Audit events retain at most 65,536 runes of canonical selected content
-in newest-to-oldest order; `full_prompt_truncated` states whether the retained
-value reached that bound. The redacted preview is taken from the head of that
-newest-first text. The scanner input limit remains at most 100,000 runes per
-chunk. Operational
+Prompt Audit events retain at most 65,536 runes of the selected current-user
+text; `full_prompt_truncated` states whether the retained value reached that
+bound. The redacted preview is taken from the head of that selected text. The
+scanner input limit remains at most 100,000 runes per chunk. Operational
 metadata includes trusted normalized client IP, prompt length, selected
 message count, execution mode, queue delay, effective input limit, matched
 chunk index, and separate last-success and last-error timestamps. Client IP
@@ -323,3 +381,98 @@ the same change and provide all of the following evidence:
 
 Route-call presence or static source-order assertions alone do not prove
 content coverage.
+
+## Model admission, route aliases and follow-up turns
+
+Group `model_allowlist` admission uses the client model before account/channel
+mapping and does not replace content audit. Root route aliases and Plus batch
+and asynchronous image endpoints retain the same audit ordering as `/v1`.
+WebSocket follow-up `response.create` calls invoke `BeforeRequest` for canonical
+audit before `BeforeTurn` acquires resources; each turn invokes that acquisition
+hook once. Unknown valid frames still reach the audit hook and pass extraction
+without an audit-derived rejection. A real policy rejection prevents upstream
+writes, including for successfully extracted content alongside unknown fields.
+
+The [official CN provider catalog](CN_PROVIDER_MODELS.md) supplies management
+allowlist candidates and the existing DeepSeek/MiniMax native Codex model
+fallback lists. Updating those IDs does not add an ingress path or change the
+allowlist matching rules, extraction, mapping, or side-effect boundaries above.
+The DeepSeek empty-mapping admission list also accepts `deepseek-v4.1-flash`;
+Flash request names are forwarded unchanged without an automatic alias mapping.
+The versioned IDs `deepseek-v4-flash-0731` and `deepseek-v4-pro-0813` also use
+the shared catalog for candidates and empty-mapping admission. These names use
+the same extraction and audit ordering as existing names.
+
+Named function/custom-tool inputs, allowed-tools metadata and terminal `done`
+argument reconstruction do not introduce a separate extractor. If reconstructed
+output returns as a later request, it follows the same shared extraction matrix
+for both engines. Metadata that is not extractable content remains pass-through;
+known sibling inputs remain auditable. Extraction/evaluation/dependency exceptions
+retain the structured diagnostics and non-blocking behavior specified above.
+
+
+DeepSeek, Kimi and MiniMax native OAuth accounts use the existing Messages,
+Chat Completions and Responses ingress routes and canonical extraction. Their
+new management login endpoints carry authorization data, not inference content.
+Account selection, request-path credential refresh, protocol adaptation and
+provider writes remain after ingress audit. Unknown valid structures retain
+pass-through behavior for both API Key and native OAuth account types; known
+sibling content remains auditable. Domestic OAuth credentials introduce no new
+WebSocket ingress or direct WebSocket upstream capability. The account-type
+pass-through regression matrix includes all three native providers, alongside
+the existing HTTP/WS stage-order and canonical real-payload suites.
+
+The domestic identity source review also permits linked GLM OAuth accounts to
+use their already-derived plan API key on the OpenAI-compatible forwarding path.
+This changes credential retrieval only: canonical extraction and the accepted
+request's audit-before-selection boundary remain the existing CN adapter path.
+No new ingress endpoint, payload shape, audit exemption, or raw-content logging
+is introduced by protocol-specific outbound identity rendering.
+
+## StepFun transport
+
+StepFun API Key and native Step Plan OAuth use the existing audited Chat
+Completions, Responses and Messages HTTP handlers. Responses/Messages convert
+to Chat Completions only after canonical audit. Tool arguments/results,
+reasoning content, images and unknown siblings retain the existing shared
+extraction contract for both engines. Platform selection and OAuth's Bearer
+credential do not introduce a pre-audit upstream operation. Native upstream
+Responses WebSocket is not advertised for StepFun. The domestic account-type
+pass-through matrix includes StepFun alongside the existing providers.
+
+StepFun's administrator-only OAuth model preview (`cn/oauth/stepfun/models`)
+accepts an owned ready session handle and reads a model catalog without creating
+an account. It carries no inference content and preserves the existing
+administrator authentication boundary. Completion stores model restrictions;
+neither operation changes the gateway extraction or audit ordering contract.
+
+StepFun response usage accepts the official flat `usage.cached_tokens` field
+and retains it through both response bridges. Client model catalogs also expose
+synced StepFun IDs and capabilities. These response/catalog changes introduce no
+new inference input fields or audit exemptions; both account types still use the
+same canonical extraction and pre-selection audit boundary above.
+
+### Error-record attribution
+
+Trusted local 403 denials from either engine are request refusals with the
+`security_audit` usage category and no selected-account/upstream attribution.
+The exact local decision, not a matching inbound/provider string, authorizes
+this classification. Dependency failures keep their existing classification;
+extraction failures continue to pass through under the table above. HTTP wire
+bodies, WebSocket errors/closes, SLA/business-limit flags and audit ordering are
+unchanged. WebSocket attribution is per turn. See
+[error request diagnostics](ERROR_REQUEST_DIAGNOSTICS.md) for filtering and the
+one-time historical correction.
+
+### Grok official outbound adaptation
+
+Grok cache keys and tenant-isolated request associations are applied only after
+both audit engines consume the canonical ingress extraction. Cache routing grants
+no tools: the removed Free account/client controls cannot inject hosted searches.
+Explicit hosted/function name collisions follow the official Grok mapper after
+audit; neither engine attributes tool definitions to the direct user. Host's
+outbound project-token exception affects destination policy only and never skips
+ingress audit, account ownership, billing or concurrency ordering. Existing
+Responses/Chat/Messages/WS/media pass-through and side-effect-order regressions
+remain mandatory; unknown and unextractable content keeps the established
+pass-through contract.

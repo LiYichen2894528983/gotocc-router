@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package service
 
 import (
@@ -28,7 +30,7 @@ func codexProfileOnlyAccount() *Account {
 
 func officialCodexProfileHeaders(originator string) map[string]string {
 	return map[string]string{
-		"User-Agent":              originator + "/0.147.0 (Mac OS 26.0; arm64) terminal (" + originator + "; 0.147.0)",
+		"User-Agent":              originator + "/0.158.0 (Mac OS 26.0; arm64) terminal (" + originator + "; 0.158.0)",
 		"originator":              originator,
 		"x-codex-installation-id": "installation-1",
 	}
@@ -44,7 +46,7 @@ func TestDetectCodexClientProfile(t *testing.T) {
 		require.True(t, result.Matched)
 		require.Equal(t, CodexClientRestrictionReasonMatchedOfficialProfile, result.Reason)
 		require.Equal(t, string(openai.CodexClientProfileCLI), result.Profile)
-		require.Equal(t, "0.147.0", result.DetectedVersion)
+		require.Equal(t, "0.158.0", result.DetectedVersion)
 	})
 
 	t.Run("official CLI, TUI, VS Code, and desktop aliases are accepted", func(t *testing.T) {
@@ -118,9 +120,27 @@ func TestDetectCodexClientProfile(t *testing.T) {
 		require.Equal(t, CodexClientRestrictionReasonVersionTooLow, tooOld.Reason)
 	})
 
-	t.Run("UA and Originator must be an exact coherent pair", func(t *testing.T) {
+	t.Run("official transport accepts reviewed product-service originators", func(t *testing.T) {
+		for _, originator := range []string{
+			"chatgpt_cca",
+			"codex_work_desktop",
+			"codex_work_web",
+			"codex_work_mobile",
+			"codex_work_cca",
+		} {
+			t.Run(originator, func(t *testing.T) {
+				headers := officialCodexProfileHeaders("codex_vscode")
+				headers["originator"] = originator
+				result := detector.Detect(newCodexProfileDetectorContext(headers), account, CodexRestrictionPolicy{}, nil)
+				require.True(t, result.Matched)
+				require.Equal(t, string(openai.CodexClientProfileIDE), result.Profile)
+			})
+		}
+	})
+
+	t.Run("official transport with unknown Originator is rejected", func(t *testing.T) {
 		headers := officialCodexProfileHeaders("codex_cli_rs")
-		headers["originator"] = "codex_vscode"
+		headers["originator"] = "unknown_service"
 		result := detector.Detect(newCodexProfileDetectorContext(headers), account, CodexRestrictionPolicy{}, nil)
 		require.False(t, result.Matched)
 		require.Equal(t, CodexClientRestrictionReasonNotMatchedProfile, result.Reason)
@@ -138,7 +158,7 @@ func TestDetectCodexClientProfile(t *testing.T) {
 
 	t.Run("UA trailer and case-insensitive Codex family cannot bypass", func(t *testing.T) {
 		trailer := officialCodexProfileHeaders("codex_cli_rs")
-		trailer["User-Agent"] = "curl/8.0 (codex_cli_rs; 0.147.0)"
+		trailer["User-Agent"] = "curl/8.0 (codex_cli_rs; 0.158.0)"
 		require.False(t, detector.Detect(newCodexProfileDetectorContext(trailer), account, CodexRestrictionPolicy{}, nil).Matched)
 
 		family := officialCodexProfileHeaders("Codex Desktop")
@@ -156,8 +176,8 @@ func TestDetectCodexClientProfile(t *testing.T) {
 	})
 
 	t.Run("Responses WebSocket handshake accepts the official window identifier", func(t *testing.T) {
-		// Upstream Codex builds its Responses WebSocket handshake with the
-		// coherent originator/UA pair and x-codex-window-id. Keep this fixture
+		// Upstream Codex builds its Responses WebSocket handshake with an
+		// official transport identity and x-codex-window-id. Keep this fixture
 		// separate from the HTTP installation-id shape so a future tightening
 		// cannot accidentally block the official streaming transport.
 		headers := officialCodexProfileHeaders("codex_cli_rs")

@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/cnmodels"
+)
 
 // resolveOpenAIForwardModel 解析 OpenAI 兼容转发使用的模型。
 // messagesDispatchMappedModel 是调用方已为 /v1/messages 解析的显式调度结果；
@@ -40,6 +44,7 @@ var openAIOAuthForeignModelPrefixes = []string{
 	"qwen4-",
 	"qwq-",
 	"minimax-",
+	"step-",
 	"gemini-",
 	"gemma-",
 	"grok-",
@@ -53,7 +58,6 @@ var openAIOAuthForeignModelPrefixes = []string{
 	"mixtral-",
 	"baichuan-",
 	"ernie-",
-	"step-",
 	"seed-",
 	"yi-",
 }
@@ -80,6 +84,36 @@ func isOpenAIOAuthServableModel(requestedModel string) bool {
 		}
 	}
 	return true
+}
+
+// deepseekServableModels 与前端及管理端候选共用目录，包含 Flash／Pro
+// 版本化请求名，避免出现可选却无法调度的模型。只决定准入，不改写出站模型名。
+var deepseekServableModels = cnmodels.DefaultModelIDs(PlatformDeepseek)
+
+// isDeepseekServableModel 报告 DeepSeek 平台账号在「未配置 model_mapping」时
+// 可服务的模型名。deepseek-v4.1-flash 原样透传；官方推荐模型为
+// deepseek-flash 与 deepseek-v4-pro；旧名
+// deepseek-v4-flash / deepseek-v4-flash-vision-exp 处于兼容路由期（上游仍接受并
+// 按 flash 价计费）；deepseek-v4-flash-0731 与 deepseek-v4-pro-0813 保留
+// 版本化请求名。目录之外一律拒绝：既避免把
+// 未知模型透传给上游（上游 404/400 会触发 per-model 冷却并掩盖真实配置错误），
+// 也避免上游把不认识的模型名静默兜底成 deepseek-flash。
+// Source: https://api-docs.deepseek.com/quick_start/pricing
+//
+//	https://api-docs.deepseek.com/guides/anthropic_api
+func isDeepseekServableModel(requestedModel string) bool {
+	// 官方 Claude Code 接入文档要求 ANTHROPIC_MODEL=deepseek-flash[1m]：
+	// [1m] 是客户端上下文选择器，先按同一规则归一化再比对白名单。
+	model := strings.ToLower(normalizeClaudeCodeLongContextModel(strings.TrimSpace(requestedModel)))
+	if model == "" {
+		return true // 空模型交由上层必填校验处理
+	}
+	for _, servable := range deepseekServableModels {
+		if model == servable {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveOpenAICompactForwardModel determines the compact-only upstream model

@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package handler
 
 import (
@@ -26,12 +28,15 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 		{file: "gemini_v1beta_handler.go", function: "GeminiV1BetaModels", auditToken: "checkSecurityAudit"},
 		{file: "openai_gateway_handler.go", function: "Responses", auditToken: "checkSecurityAudit"},
 		{file: "openai_gateway_handler.go", function: "Messages", auditToken: "checkSecurityAudit"},
+		{file: "openai_gateway_handler.go", function: "ResponsesWebSocket", auditToken: "checkSecurityAuditStage"},
 		{file: "openai_chat_completions.go", function: "ChatCompletions", auditToken: "checkSecurityAudit"},
 		{file: "openai_images.go", function: "Images", auditToken: "checkSecurityAudit"},
 		{file: "grok_media.go", function: "handleGrokMedia", auditToken: "checkSecurityAudit"},
 		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkSecurityAudit"},
 		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkSecurityAudit"},
+		{file: "gateway_web_search.go", function: "WebSearch", auditToken: "checkSecurityAudit"},
 		{file: "openai_live.go", function: "Live", auditToken: "checkSecurityAudit"},
+		{file: "gateway_systemone.go", function: "SystemOne", auditToken: "checkSecurityAudit"},
 		{file: "image_task_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
 		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
 	}
@@ -40,6 +45,8 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 		"AcquireUserSlot", "TryAcquireUserSlot", "acquireImageGenerationSlot(",
 		"h.tasks.Create(", "h.tasks.CreateWithMetadata(", "h.service.Submit(", "CreateLiveCall(",
 		"StartOpenAICompactSSEKeepalive(", "ResolveChannelMappingAndRestrict(",
+		"AcquireOpenAIWSIngressLease(",
+		"reserveInflightBalance(", "reserveInflightBalanceCtx(",
 	}
 	for _, tt := range tests {
 		t.Run(tt.file+"/"+tt.function, func(t *testing.T) {

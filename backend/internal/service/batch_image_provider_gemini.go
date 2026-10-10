@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/brandidentity"
+	"github.com/LuckyKuang/sub2api-plus/internal/pkg/outboundidentity"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -88,6 +90,7 @@ func (p *GeminiAPIBatchImageProvider) SupportsAccount(account *Account) bool {
 }
 
 func (p *GeminiAPIBatchImageProvider) Submit(ctx context.Context, job *BatchImageJob, account *Account, input BatchImageInput) (*BatchProviderJob, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	if account == nil || account.Platform != PlatformGemini || account.Type != AccountTypeAPIKey {
 		return nil, ErrBatchImageProviderUnsupportedAccount
 	}
@@ -136,6 +139,7 @@ func (p *GeminiAPIBatchImageProvider) Submit(ctx context.Context, job *BatchImag
 }
 
 func (p *GeminiAPIBatchImageProvider) Get(ctx context.Context, job *BatchImageJob, account *Account) (*BatchProviderStatus, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	if account == nil || account.Platform != PlatformGemini || account.Type != AccountTypeAPIKey {
 		return nil, ErrBatchImageProviderUnsupportedAccount
 	}
@@ -174,6 +178,7 @@ func (p *GeminiAPIBatchImageProvider) Get(ctx context.Context, job *BatchImageJo
 }
 
 func (p *GeminiAPIBatchImageProvider) Cancel(ctx context.Context, job *BatchImageJob, account *Account) error {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	if account == nil || account.Platform != PlatformGemini || account.Type != AccountTypeAPIKey {
 		return ErrBatchImageProviderUnsupportedAccount
 	}
@@ -189,6 +194,7 @@ func (p *GeminiAPIBatchImageProvider) Cancel(ctx context.Context, job *BatchImag
 }
 
 func (p *GeminiAPIBatchImageProvider) OpenResult(ctx context.Context, job *BatchImageJob, account *Account) (io.ReadCloser, string, error) {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	if account == nil || account.Platform != PlatformGemini || account.Type != AccountTypeAPIKey {
 		return nil, "", ErrBatchImageProviderUnsupportedAccount
 	}
@@ -205,6 +211,7 @@ func (p *GeminiAPIBatchImageProvider) OpenResult(ctx context.Context, job *Batch
 }
 
 func (p *GeminiAPIBatchImageProvider) Cleanup(ctx context.Context, job *BatchImageJob, account *Account, target CleanupTarget) error {
+	ctx = WithAccountOutboundIdentity(ctx, account)
 	if account == nil || account.Platform != PlatformGemini || account.Type != AccountTypeAPIKey {
 		return ErrBatchImageProviderUnsupportedAccount
 	}
@@ -474,7 +481,7 @@ func batchImageDefaultHTTPClient() *http.Client {
 		ResponseHeaderTimeout: 60 * time.Second,
 	})
 	if err != nil {
-		return http.DefaultClient
+		return brandidentity.WrapClient(nil)
 	}
 	return client
 }
@@ -591,6 +598,7 @@ func (c *GeminiBatchHTTPClient) DownloadFile(ctx context.Context, apiKey string,
 		return nil, "", err
 	}
 	req.Header.Set("x-goog-api-key", apiKey)
+	outboundidentity.ApplyDefault(req, "gemini")
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, "", err
@@ -627,6 +635,7 @@ func (c *GeminiBatchHTTPClient) doBatchJob(req *http.Request) (*GeminiBatchJob, 
 }
 
 func (c *GeminiBatchHTTPClient) doNoBody(req *http.Request) error {
+	outboundidentity.ApplyDefault(req, "gemini")
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
@@ -639,6 +648,7 @@ func (c *GeminiBatchHTTPClient) doNoBody(req *http.Request) error {
 }
 
 func (c *GeminiBatchHTTPClient) doJSON(req *http.Request, out any) error {
+	outboundidentity.ApplyDefault(req, "gemini")
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return err

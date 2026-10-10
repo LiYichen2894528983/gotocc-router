@@ -1,3 +1,5 @@
+//go:build integration
+
 package service
 
 import (
@@ -33,7 +35,7 @@ func TestPluginRuntimeIntegration(t *testing.T) {
 	defer func() { _ = packageFile.Close() }()
 
 	root := t.TempDir()
-	cfg := testPluginConfig(root, false)
+	cfg := integrationPluginConfig(root, false)
 	installer := NewPluginPackageInstaller(cfg, PluginHostInfo{Version: "0.1.179", BuildType: "release"})
 	installation, err := installer.Install(context.Background(), packageFile, nil)
 	require.NoError(t, err)
@@ -47,7 +49,7 @@ func TestPluginRuntimeIntegration(t *testing.T) {
 		assert.FileExists(t, filepath.Join(installation.InstallPath, filepath.FromSlash(relative)))
 	}
 
-	runtime, err := startPluginRuntime(context.Background(), installation, 10*time.Second, filepath.Join(root, "runtime"))
+	runtime, err := startPluginRuntime(context.Background(), installation, 10*time.Second, filepath.Join(root, "runtime"), nil)
 	require.NoError(t, err)
 	defer runtime.kill()
 	require.NoError(t, runtime.validateAndApplyConfig(context.Background(), []byte(`{

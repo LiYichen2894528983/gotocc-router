@@ -15,7 +15,7 @@ import (
 // 广场路由挂 OptionalJWT 中间件：匿名可访问（除非 require_auth 开启），带 token 则
 // 识别用户。可见性规则（橱窗语义，与「可用渠道」的可绑定语义不同）：
 //   - 匿名：仅非专属分组（订阅型照常展示）；
-//   - 登录：非专属分组 + user_allowed_groups 授权的专属分组（不检查订阅有效性）；
+//   - 登录：非专属分组 + user_allowed_groups 授权或持有有效订阅的专属分组；
 //     若该用户开启了公开分组限制，则公开分组同样需要落在授权集合内。
 type ModelPlazaHandler struct {
 	modelPlazaService *service.ModelPlazaService
@@ -72,6 +72,10 @@ type modelPlazaModel struct {
 	LongContextBasis string `json:"long_context_basis,omitempty"`
 	// TimePricing 分时倍率时段，落在时段内的请求整单乘倍率；无分时省略。
 	TimePricing *modelPlazaTimePricing `json:"time_pricing,omitempty"`
+	// GoToCC：官方目录信息与近 24 小时状态。
+	Info  *service.PlazaModelInfo  `json:"info,omitempty"`
+	Stats *service.PlazaModelStats `json:"stats,omitempty"`
+	Video *service.PlazaVideoInfo  `json:"video,omitempty"`
 }
 
 // modelPlazaGroup 广场分组条目（白名单字段）。
@@ -92,6 +96,8 @@ type modelPlazaGroup struct {
 	// 不取分组/用户专属倍率。
 	ImageRateIndependent bool    `json:"image_rate_independent"`
 	ImageRateMultiplier  float64 `json:"image_rate_multiplier"`
+	VideoRateIndependent bool    `json:"video_rate_independent"`
+	VideoRateMultiplier  float64 `json:"video_rate_multiplier"`
 	// 分组是否启用长上下文阶梯计费；关闭时模型实付列只展示最低档/基础价。
 	LongContextPricingEnabled bool              `json:"long_context_pricing_enabled"`
 	Models                    []modelPlazaModel `json:"models"`
@@ -124,6 +130,10 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 
 	groups, err := h.modelPlazaService.ListGroups(c.Request.Context())
 	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := h.modelPlazaService.EnrichModels(c.Request.Context(), groups, h.settingService); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -160,7 +170,7 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 }
 
 // filterPlazaVisibleGroups 按登录态裁剪分组可见性。
-// allowedGroups == nil 表示匿名（仅非专属）；非 nil 表示登录（非专属 + 授权专属）。
+// allowedGroups == nil 表示匿名（仅非专属）；非 nil 包含普通授权及有效订阅分组。
 // restrictPublicGroups 为 true 时，公开分组也必须落在 allowedGroups 内，否则用户会
 // 在广场看到自己实际绑定不了的分组。
 func filterPlazaVisibleGroups(
@@ -195,6 +205,9 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 			OfficialPricing:  toModelPlazaOfficialPricing(m.OfficialPricing),
 			LongContextBasis: string(m.LongContextBasis),
 			TimePricing:      toModelPlazaTimePricing(m.TimePricing),
+			Info:             m.Info,
+			Stats:            m.Stats,
+			Video:            m.Video,
 		})
 	}
 	dto := modelPlazaGroup{
@@ -211,6 +224,8 @@ func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) mo
 		IsExclusive:               g.IsExclusive,
 		ImageRateIndependent:      g.ImageRateIndependent,
 		ImageRateMultiplier:       g.ImageRateMultiplier,
+		VideoRateIndependent:      g.VideoRateIndependent,
+		VideoRateMultiplier:       g.VideoRateMultiplier,
 		LongContextPricingEnabled: g.LongContextPricingEnabled,
 		Models:                    models,
 	}

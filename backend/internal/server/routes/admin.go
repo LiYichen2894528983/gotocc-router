@@ -41,7 +41,7 @@ func RegisterAdminRoutes(
 		registerUserManagementRoutes(admin, h)
 
 		// 用户支持视图（仅注册 GET 路由）
-		registerAdminSupportRoutes(admin, h)
+		registerAdminSupportRoutes(admin, h, settingService)
 
 		// 分组管理
 		registerGroupRoutes(admin, h)
@@ -63,6 +63,10 @@ func RegisterAdminRoutes(
 
 		// Grok OAuth
 		registerGrokOAuthRoutes(admin, h)
+
+		// Zhipu / GLM OAuth（ZCode 平台账户绑定）
+		registerZhipuOAuthRoutes(admin, h)
+		admin.POST("/cn/oauth/:platform/:action", h.Admin.CNOAuth.Handle)
 
 		// 国产供应商（kimi/zhipu/deepseek）额度与余额
 		registerCNProviderRoutes(admin, h)
@@ -127,12 +131,19 @@ func RegisterAdminRoutes(
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h, settingService)
 		registerChannelMonitorV2Routes(admin, h, settingService)
+		monitorV3 := admin.Group("/channel-monitor-v3")
+		monitorV3.Use(channelMonitorAdminFeatureGuard(settingService))
+		monitorV3.GET("/config", h.ChannelMonitorV3.GetConfig)
+		monitorV3.PUT("/config", h.ChannelMonitorV3.UpdateConfig)
 
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
 
 		// 独立提示词输入审计
 		registerPromptAuditRoutes(admin, h)
+
+		// LC-024 代理中心（只读名单）
+		registerAgentRoutes(admin, h)
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
@@ -142,39 +153,10 @@ func RegisterAdminRoutes(
 
 		// 团队运维管理沿用 Plus 管理认证、限流、合规与审计链。
 		registerTeamRoutes(admin, h, stepUpAuth)
-	}
-}
 
-func registerTeamRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
-	teams := admin.Group("/teams")
-	{
-		teams.GET("", h.Admin.Team.List)
-		teams.POST("", h.Admin.Team.Create)
-		teams.GET("/:id", h.Admin.Team.Get)
-		teams.GET("/:id/members", h.Admin.Team.ListMembers)
-		teams.GET("/:id/usage", h.Admin.Team.GetUsage)
-		teams.PATCH("/:id", h.Admin.Team.Update)
-		teams.POST("/:id/force-transfer", gin.HandlerFunc(stepUpAuth), h.Admin.Team.ForceTransfer)
-		teams.DELETE("/:id", gin.HandlerFunc(stepUpAuth), h.Admin.Team.Dissolve)
-	}
-}
-
-func registerAdminSupportRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	support := admin.Group("/support/users/:user_id")
-	support.Use(h.Admin.User.RequireSupportTarget)
-	{
-		support.GET("", h.Admin.User.GetSupportProfile)
-		support.GET("/profile", h.Admin.User.GetSupportProfile)
-		support.GET("/api-keys", h.Admin.User.GetSupportAPIKeys)
-		support.GET("/usage", h.Usage.AdminSupportStats)
-		support.GET("/async-images", h.AsyncImage.AdminSupportList)
-		support.GET("/async-images/:task_id", h.AsyncImage.AdminSupportGet)
-		support.GET("/channels", h.AvailableChannel.AdminSupportList)
-		support.GET("/channel-status", h.ChannelMonitor.List)
-		support.GET("/channel-status/:id", h.ChannelMonitor.GetStatus)
-		support.GET("/subscriptions", h.Subscription.AdminSupportList)
-		support.GET("/orders", h.Payment.AdminSupportListOrders)
-		support.GET("/orders/:order_id", h.Payment.AdminSupportGetOrder)
+		// 影策画布桥接（管理员 API Key 调用）
+		registerCanvasBridgeRoutes(admin, h)
+		registerModelPlazaOverrideRoutes(admin, h)
 	}
 }
 
@@ -201,6 +183,7 @@ func registerPromptAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		promptAudit.GET("/config", h.Admin.PromptAudit.GetConfig)
 		promptAudit.PUT("/config", h.Admin.PromptAudit.UpdateConfig)
 		promptAudit.POST("/endpoints/probe", h.Admin.PromptAudit.ProbeEndpoint)
+		promptAudit.POST("/test", h.Admin.PromptAudit.TestText)
 		promptAudit.GET("/runtime", h.Admin.PromptAudit.GetRuntime)
 		promptAudit.GET("/events", h.Admin.PromptAudit.ListEvents)
 		promptAudit.GET("/events/:id", h.Admin.PromptAudit.GetEvent)
@@ -372,6 +355,8 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		users.GET("", h.Admin.User.List)
 		users.GET("/:id", h.Admin.User.GetByID)
+		users.GET("/:id/reseller", h.Reseller.AdminProfile)
+		users.PUT("/:id/reseller", h.Reseller.AdminSave)
 		users.POST("/:id/auth-identities", h.Admin.User.BindAuthIdentity)
 		users.POST("", h.Admin.User.Create)
 		users.PUT("/:id", h.Admin.User.Update)
@@ -399,11 +384,12 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		groups.GET("", h.Admin.Group.List)
 		groups.GET("/all", h.Admin.Group.GetAll)
+		groups.GET("/video-protocols", h.Admin.Group.VideoProtocols)
 		groups.GET("/usage-summary", h.Admin.Group.GetUsageSummary)
 		groups.GET("/capacity-summary", h.Admin.Group.GetCapacitySummary)
 		groups.GET("/live-capability", h.Admin.Group.GetLiveCapability)
 		groups.PUT("/sort-order", h.Admin.Group.UpdateSortOrder)
-		groups.GET("/:id/models-list-candidates", h.Admin.Group.GetModelsListCandidates)
+		groups.GET("/:id/model-allowlist-candidates", h.Admin.Group.GetGroupModelAllowlistCandidates)
 		groups.GET("/:id/composite-routes", h.Admin.Group.ListCompositeRoutes)
 		groups.POST("/:id/composite-routes", h.Admin.Group.CreateCompositeRoute)
 		groups.POST("/:id/composite-routes/preview", h.Admin.Group.PreviewCompositeRoute)
@@ -430,7 +416,12 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.GET("", h.Admin.Account.List)
 		accounts.GET("/ollama-cloud-usage/settings", h.Admin.Account.GetOllamaCloudUsageSettings)
 		accounts.PUT("/ollama-cloud-usage/settings", h.Admin.Account.UpdateOllamaCloudUsageSettings)
+		accounts.GET("/opencode-go-usage/settings", h.Admin.Account.GetOpenCodeGoUsageSettings)
+		accounts.PUT("/opencode-go-usage/settings", h.Admin.Account.UpdateOpenCodeGoUsageSettings)
 		accounts.GET("/:id", h.Admin.Account.GetByID)
+		accounts.GET("/:id/claude/reset-credits", h.Admin.Account.ClaudeResetCredits)
+		// Same protection as the Codex reset-quota route (admin auth, audit, compliance guard).
+		accounts.POST("/:id/claude/reset-credits/redeem", h.Admin.Account.RedeemClaudeResetCredit)
 		accounts.POST("", h.Admin.Account.Create)
 		accounts.POST("/:id/duplicate", h.Admin.Account.Duplicate)
 		accounts.POST("/check-mixed-channel", h.Admin.Account.CheckMixedChannel)
@@ -438,11 +429,16 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/sync/crs", h.Admin.Account.SyncFromCRS)
 		accounts.POST("/sync/crs/preview", h.Admin.Account.PreviewFromCRS)
 		accounts.PUT("/:id", h.Admin.Account.Update)
+		accounts.GET("/:id/grok-media-eligibility", h.Admin.Account.GetGrokMediaEligibility)
+		accounts.PUT("/:id/grok-media-eligibility", h.Admin.Account.UpdateGrokMediaEligibility)
 		accounts.GET("/:id/ollama-cloud-usage", h.Admin.Account.GetOllamaCloudUsage)
 		accounts.PUT("/:id/ollama-cloud-usage/session", h.Admin.Account.SaveOllamaCloudUsageSession)
 		accounts.DELETE("/:id/ollama-cloud-usage/session", h.Admin.Account.DeleteOllamaCloudUsageSession)
 		accounts.PUT("/:id/ollama-cloud-usage/auto-refresh", h.Admin.Account.SetOllamaCloudUsageAutoRefresh)
 		accounts.POST("/:id/ollama-cloud-usage/refresh", h.Admin.Account.RefreshOllamaCloudUsage)
+		accounts.GET("/:id/opencode-go-usage", h.Admin.Account.GetOpenCodeGoUsage)
+		accounts.PUT("/:id/opencode-go-usage/auto-refresh", h.Admin.Account.SetOpenCodeGoUsageAutoRefresh)
+		accounts.POST("/:id/opencode-go-usage/refresh", h.Admin.Account.RefreshOpenCodeGoUsage)
 		accounts.DELETE("/:id", h.Admin.Account.Delete)
 		accounts.POST("/:id/test", h.Admin.Account.Test)
 		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
@@ -515,6 +511,8 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	openai := admin.Group("/openai")
 	{
 		openai.POST("/generate-auth-url", h.Admin.OpenAIOAuth.GenerateAuthURL)
+		openai.POST("/device-code/start", h.Admin.OpenAIOAuth.StartDeviceCode)
+		openai.POST("/device-code/poll", h.Admin.OpenAIOAuth.PollDeviceCode)
 		openai.POST("/exchange-code", h.Admin.OpenAIOAuth.ExchangeCode)
 		openai.POST("/refresh-token", h.Admin.OpenAIOAuth.RefreshToken)
 		openai.POST("/accounts/:id/refresh", h.Admin.OpenAIOAuth.RefreshAccountToken)
@@ -523,6 +521,8 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.GET("/accounts/:id/quota", h.Admin.OpenAIOAuth.QueryQuota)
 		openai.POST("/accounts/:id/quota/refresh", h.Admin.OpenAIOAuth.RefreshQuota)
 		openai.POST("/accounts/:id/reset-quota", h.Admin.OpenAIOAuth.ResetQuota)
+		openai.POST("/accounts/:id/referrals/refresh", h.Admin.OpenAIOAuth.RefreshReferrals)
+		openai.POST("/accounts/:id/referrals/invite", h.Admin.OpenAIOAuth.SendReferralInvite)
 	}
 }
 
@@ -623,25 +623,15 @@ func registerPromoCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerReusableInvitationCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	if h.Admin == nil || h.Admin.ReusableInvitationCode == nil {
-		return
-	}
-	codes := admin.Group("/reusable-invitation-codes")
-	{
-		codes.GET("", h.Admin.ReusableInvitationCode.List)
-		codes.POST("", h.Admin.ReusableInvitationCode.Create)
-		codes.POST("/:id/disable", h.Admin.ReusableInvitationCode.Disable)
-		codes.GET("/:id/uses", h.Admin.ReusableInvitationCode.ListUses)
-	}
-}
-
 func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	adminSettings := admin.Group("/settings")
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
 		adminSettings.POST("/openai-codex-version/sync", h.Admin.Setting.SyncOpenAICodexVersion)
+		adminSettings.GET("/outbound-identity", h.Admin.Setting.GetOutboundIdentity)
+		adminSettings.PUT("/outbound-identity", h.Admin.Setting.UpdateOutboundIdentity)
+		adminSettings.POST("/outbound-identity/preview", h.Admin.Setting.PreviewOutboundIdentity)
 		adminSettings.POST("/test-smtp", h.Admin.Setting.TestSMTPConnection)
 		adminSettings.POST("/send-test-email", h.Admin.Setting.SendTestEmail)
 		adminSettings.GET("/email-templates", h.Admin.Setting.ListEmailTemplates)
@@ -758,6 +748,7 @@ func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		subscriptions.GET("/:id/progress", h.Admin.Subscription.GetProgress)
 		subscriptions.POST("/assign", h.Admin.Subscription.Assign)
 		subscriptions.POST("/bulk-assign", h.Admin.Subscription.BulkAssign)
+		subscriptions.POST("/bulk-action", h.Admin.Subscription.BulkAction)
 		subscriptions.POST("/:id/extend", h.Admin.Subscription.Extend)
 		subscriptions.POST("/:id/reset-quota", h.Admin.Subscription.ResetQuota)
 		subscriptions.POST("/:id/revoke", h.Admin.Subscription.Revoke)
@@ -842,6 +833,7 @@ func registerPluginRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 		plugins.POST("/:id/disable", gin.HandlerFunc(stepUpAuth), h.Admin.Plugin.Disable)
 		plugins.DELETE("/:id", gin.HandlerFunc(stepUpAuth), h.Admin.Plugin.Delete)
 		plugins.GET("/:id/config", h.Admin.Plugin.GetConfig)
+		plugins.GET("/:id/status", h.Admin.Plugin.Status)
 		plugins.PUT("/:id/config", gin.HandlerFunc(stepUpAuth), h.Admin.Plugin.SaveConfig)
 		plugins.POST("/:id/test", gin.HandlerFunc(stepUpAuth), h.Admin.Plugin.Test)
 		plugins.POST("/:id/ui-session", h.Admin.Plugin.CreateUISession)
@@ -853,7 +845,7 @@ func registerChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		channels.GET("", h.Admin.Channel.List)
 		channels.GET("/model-pricing", h.Admin.Channel.GetModelDefaultPricing)
-		channels.GET("/pricing/sync-models", h.Admin.Channel.SyncPricingModels)
+		channels.POST("/pricing/sync-models", h.Admin.Channel.SyncPricingModels)
 		channels.GET("/:id", h.Admin.Channel.GetByID)
 		channels.POST("", h.Admin.Channel.Create)
 		channels.PUT("/:id", h.Admin.Channel.Update)
@@ -896,6 +888,7 @@ func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		affiliates.GET("/invites", h.Admin.Affiliate.ListInviteRecords)
 		affiliates.GET("/rebates", h.Admin.Affiliate.ListRebateRecords)
 		affiliates.GET("/transfers", h.Admin.Affiliate.ListTransferRecords)
+		affiliates.POST("/inviter/resolve", h.Admin.Affiliate.ResolveInviterCode)
 
 		users := affiliates.Group("/users")
 		{
@@ -903,6 +896,8 @@ func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 			users.GET("/lookup", h.Admin.Affiliate.LookupUsers)
 			users.POST("/batch-rate", h.Admin.Affiliate.BatchSetRate)
 			users.GET("/:user_id/overview", h.Admin.Affiliate.GetUserOverview)
+			users.POST("/:user_id/withdraw", h.Admin.Affiliate.WithdrawQuota)
+			users.GET("/:user_id/inviter", h.Admin.Affiliate.GetInviter)
 			users.PUT("/:user_id", h.Admin.Affiliate.UpdateUserSettings)
 			users.DELETE("/:user_id", h.Admin.Affiliate.ClearUserSettings)
 		}
@@ -967,5 +962,40 @@ func channelMonitorModeV2Guard(settingService *service.SettingService) gin.Handl
 			return
 		}
 		c.Next()
+	}
+}
+
+func channelMonitorModeV3Guard(settings *service.SettingService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if settings == nil {
+			response.ErrorFrom(c, service.ErrChannelMonitorDisabled)
+			c.Abort()
+			return
+		}
+		rt := settings.GetChannelMonitorRuntime(c.Request.Context())
+		if !rt.Enabled {
+			response.ErrorFrom(c, service.ErrChannelMonitorDisabled)
+			c.Abort()
+			return
+		}
+		if rt.Mode != service.ChannelMonitorModeV3 {
+			response.ErrorFrom(c, service.ErrChannelMonitorModeMismatch)
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// registerZhipuOAuthRoutes 注册智谱 GLM 的 ZCode 平台账户绑定路由。
+// 主链路是服务端轮询握手（无需回调地址），粘贴回调 URL 只作为兜底。
+func registerZhipuOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	zhipu := admin.Group("/zhipu")
+	{
+		zhipu.GET("/oauth/capabilities", h.Admin.ZhipuOAuth.GetCapabilities)
+		zhipu.POST("/oauth/start", h.Admin.ZhipuOAuth.StartLink)
+		zhipu.POST("/oauth/poll", h.Admin.ZhipuOAuth.PollLink)
+		zhipu.POST("/oauth/exchange-code", h.Admin.ZhipuOAuth.ExchangeLink)
+		zhipu.POST("/oauth/create-from-oauth", h.Admin.ZhipuOAuth.CreateAccountFromLink)
 	}
 }

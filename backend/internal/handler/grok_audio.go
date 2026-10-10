@@ -138,7 +138,10 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 	defer func() { _ = conn.CloseNow() }()
 
 	started := time.Now()
-	turns := newGrokRealtimeTurnTracker(h.clientDisconnectRisk, subject.UserID, apiKey.ID, role, trustedClientRequestID(c))
+	turns := newGrokRealtimeTurnTracker(
+		h.clientDisconnectRisk, subject.UserID, apiKey.ID, role,
+		trustedClientRequestID(c), service.ExtractClientSessionID(c),
+	)
 	audioObserved, proxyErr := h.gatewayService.ProxyGrokRealtimeConnWithObserver(
 		c.Request.Context(), c, conn, upstream, turns.observer(c.Request.Context()),
 	)
@@ -163,6 +166,7 @@ type grokRealtimeTurnTracker struct {
 	apiKeyID  int64
 	role      string
 	requestID string
+	sessionID string
 	next      int64
 	pending   []grokRealtimePendingTurn
 }
@@ -172,8 +176,11 @@ type grokRealtimePendingTurn struct {
 	lifecycle  *service.ClientDisconnectLifecycle
 }
 
-func newGrokRealtimeTurnTracker(risk *service.ClientDisconnectRiskService, userID, apiKeyID int64, role, requestID string) *grokRealtimeTurnTracker {
-	return &grokRealtimeTurnTracker{risk: risk, userID: userID, apiKeyID: apiKeyID, role: role, requestID: requestID}
+func newGrokRealtimeTurnTracker(risk *service.ClientDisconnectRiskService, userID, apiKeyID int64, role, requestID, sessionID string) *grokRealtimeTurnTracker {
+	return &grokRealtimeTurnTracker{
+		risk: risk, userID: userID, apiKeyID: apiKeyID, role: role,
+		requestID: requestID, sessionID: sessionID,
+	}
 }
 
 func (t *grokRealtimeTurnTracker) observer(ctx context.Context) *service.GrokRealtimeTurnObserver {
@@ -200,7 +207,7 @@ func (t *grokRealtimeTurnTracker) accept(ctx context.Context, responseID string)
 	}
 	t.next++
 	lifecycle := t.risk.NewLifecycle(t.userID, t.apiKeyID, t.role,
-		fmt.Sprintf("%s:grok-turn:%d", t.requestID, t.next), "grok_realtime")
+		fmt.Sprintf("%s:grok-turn:%d", t.requestID, t.next), t.sessionID, "grok_realtime")
 	if lifecycle != nil {
 		lifecycle.Accepted(ctx)
 		t.pending = append(t.pending, grokRealtimePendingTurn{responseID: responseID, lifecycle: lifecycle})
@@ -319,7 +326,6 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 			return
 		}
 	}
-	contentType := c.GetHeader("Content-Type")
 	if !admitAutoHTTPRoute(c, h.autoGroupResolver, &apiKey) {
 		return
 	}
@@ -333,6 +339,20 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 		h.errorResponse(c, status, code, message)
 		return
 	}
+
+	// 余额模式在途预留（与计费同口径估算；计费任务扣减余额缓存后才释放）。
+	inflightDone, inflightErr := reserveInflightBalance(c, h.billingCacheService, h.gatewayService, apiKey, subscription, grokVoiceInflightEstimate(endpoint, body))
+	if inflightErr != nil {
+		status, code, message, retryAfter := billingErrorDetails(inflightErr)
+		if retryAfter > 0 {
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+		}
+		h.errorResponse(c, status, code, message)
+		return
+	}
+	defer inflightDone()
+
+	contentType := c.GetHeader("Content-Type")
 	if strings.TrimSpace(contentType) == "" {
 		contentType = "application/json"
 	}

@@ -1,3 +1,5 @@
+//go:build unit || !integration
+
 package service
 
 import (
@@ -287,7 +289,7 @@ func TestApplyCodexFingerprintHeaders_SessionMode(t *testing.T) {
 
 	assert.Equal(t, convergedInstall, h.Get("x-codex-installation-id"))
 	assert.Equal(t, convergedSession, h.Get("session-id"))
-	assert.Equal(t, convergedSession, h.Get("session_id"), "下划线形式也应被改写")
+	assert.Empty(t, h.Get("session_id"), "指纹收敛不再写下划线别名，终态仅保留官方 session-id")
 	assert.Equal(t, convergedThread, h.Get("thread-id"))
 	assert.Equal(t, convergedThread, h.Get("x-client-request-id"))
 	assert.Equal(t, convergedThread+":0", h.Get("x-codex-window-id"))
@@ -1093,7 +1095,7 @@ func TestBuildUpstreamRequestOpenAIPassthrough_AppliesStoredFingerprint(t *testi
 	require.NoError(t, err)
 
 	assert.Equal(t, ids.sessionID, req.Header.Get("session-id"), "无 body cache key 时应保留指纹收敛 session-id")
-	assert.Equal(t, ids.sessionID, req.Header.Get("session_id"), "session 模式下出站 session_id 应为账号级收敛值")
+	assert.Empty(t, req.Header.Get("session_id"), "Codex 协议出站不再携带下划线别名")
 	assert.Equal(t, ids.installationID, req.Header.Get("x-codex-installation-id"))
 	assert.Equal(t, ids.windowID, req.Header.Get("x-codex-window-id"))
 	assert.Equal(t, ids.threadID, req.Header.Get("x-client-request-id"))
@@ -1127,7 +1129,7 @@ func TestBuildUpstreamRequestOpenAIPassthrough_PromptCacheIdentityOverridesSessi
 	require.NoError(t, err)
 
 	assert.Equal(t, cacheIdentity, req.Header.Get("session-id"))
-	assert.Equal(t, cacheIdentity, req.Header.Get("session_id"))
+	assert.Empty(t, req.Header.Get("session_id"))
 	assert.Equal(t, ids.installationID, req.Header.Get("x-codex-installation-id"))
 	assert.Equal(t, ids.threadID, req.Header.Get("thread-id"))
 	assert.Equal(t, ids.threadID, req.Header.Get("x-client-request-id"))
@@ -1142,6 +1144,7 @@ func TestBuildUpstreamRequestOpenAIPassthrough_OffModeKeepsIsolatedSession(t *te
 
 	c := newFingerprintStageTestContext(t)
 	c.Request.Header.Set("session_id", "real-client-session")
+	c.Request.Header.Set("conversation_id", "client-conversation")
 	c.Request.Header.Set("originator", "codex_cli_rs")
 
 	ids := resolveCodexFingerprintIDsFromRequest(account, c.Request.Header)
@@ -1152,8 +1155,10 @@ func TestBuildUpstreamRequestOpenAIPassthrough_OffModeKeepsIsolatedSession(t *te
 	req, err := svc.buildUpstreamRequestOpenAIPassthrough(context.Background(), c, account, body, "test-token")
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, req.Header.Get("session_id"))
-	assert.NotEqual(t, resolveConvergedSessionID(account), req.Header.Get("session_id"), "off 模式不得收敛 session_id")
+	assert.Empty(t, req.Header.Get("session_id"), "off/device OAuth must not emit the legacy session_id alias")
+	assert.Empty(t, req.Header.Get("conversation_id"), "off/device OAuth must not emit auto or client conversation_id")
+	assert.NotEmpty(t, req.Header.Get("session-id"))
+	assert.NotEqual(t, resolveConvergedSessionID(account), req.Header.Get("session-id"), "off 模式不得收敛 session-id")
 	assert.Empty(t, req.Header.Get("x-codex-window-id"))
 }
 
@@ -1197,7 +1202,7 @@ func TestPrepareCodexFingerprintRaw_WebSocketTurnsKeepStableIDsAndRotateTurn(t *
 	require.Equal(t, firstIDs.threadID, headers.Get("thread-id"))
 	require.Equal(t, firstIDs.threadID, headers.Get("x-client-request-id"))
 	require.NotEmpty(t, headers.Get("session-id"))
-	require.Equal(t, headers.Get("session-id"), headers.Get("session_id"))
+	require.Empty(t, headers.Get("session_id"))
 	require.NotEqual(t, firstIDs.sessionID, headers.Get("session-id"), "Plus cache identity is final on WS handshake headers")
 
 	var firstDecoded map[string]any
@@ -1258,8 +1263,12 @@ func TestPrepareCodexFingerprintRaw_OffKeepsWebSocketBodyAndPlusSessionPolicy(t 
 		"",
 	)
 	require.NoError(t, err)
+	// off 模式走纯官方拼写：session-id 必须存在，Plus 兼容别名 session_id
+	// 与 conversation_id 一律不出现（与 openai_oauth_session_policy_test 的
+	// off/device 口径一致）。
 	require.NotEmpty(t, headers.Get("session-id"))
-	require.Equal(t, headers.Get("session-id"), headers.Get("session_id"))
+	require.Empty(t, headers.Get("session_id"))
+	require.Empty(t, headers.Get("conversation_id"))
 	require.Empty(t, headers.Get("x-codex-installation-id"))
 }
 
